@@ -9,8 +9,11 @@ from ddsp.training.data_preparation import prepare_tfrecord_lib as ddsp_lib
 
 from ddsp_piano.data_processing.midi_encoders import MIDIRoll2Conditioning
 
+seq_lib = note_seq.sequences_lib
+
 
 def str2bool(v):
+    """Convert text to boolean for argparse"""
     if isinstance(v, bool):
         return v
     if v.lower() in ('yes', 'true', 't', 'y', '1'):
@@ -45,6 +48,116 @@ def dataset_from_csv(csv_path, split=None, **kwargs):
     piano_models = df['year'].unique()
 
     return dataset, n_samples, piano_models
+
+
+def load_midi_as_note_sequence(mid_path):
+    # Read MIDI file
+    note_sequence = note_seq.midi_io.midi_file_to_note_sequence(mid_path)
+    # Extend offset with sustain pedal
+    note_sequence = note_seq.apply_sustain_control_changes(note_sequence)
+    return note_sequence
+
+
+def load_and_split_data(audio_path,
+                        mid_path,
+                        segment_duration=3.,
+                        max_polyphony=None,
+                        overlap=0.5,
+                        sample_rate=16000,
+                        frame_rate=250):
+    """Load aligned audio and MIDI data (as conditioning sequence), then split
+    into segments.
+    Args:
+        - audio_path (tf.path): absolute path to audio file.
+        - mid_path (tf.path): absolute path to midi file.
+        - segment_duration (float): length of segment chunks (in s).
+        - max_polyphony (int): number of monophonic channels for the conditio-
+        ning vector (return the piano rolls if None).
+        - overlap (float): overlapping ratio between two consecutive segemnts.
+        - sample_rate (int): number of audio samples per second.
+        - frame_rate (int): number of conditioning vectors per second.
+    Returns:
+        - segment_audio (list [n_samples,]): list of audio segments.
+        - segment_rolls (list [n_frames, max_polyphony, 2]): list of segments
+        conditioning vectors.
+        - segment_pedals (list [n_frames, 4]): list of segments pedals condi-
+        tioning.
+        - polyphony (list [n_frames, 1]): list of polyphony information in the
+        original piano roll.
+    """
+    n_samples = int(segment_duration * sample_rate)
+    n_frames = int(segment_duration * frame_rate)
+    audio_hop_size = int(n_samples * (1 - overlap))
+    midi_hop_size = int(n_frames * (1 - overlap))
+
+    # Read audio file
+    audio = ddsp_lib._load_audio_as_array(
+        audio_path.numpy().decode("utf-8"),
+        sample_rate
+    )
+    # Read MIDI file
+    note_sequence = load_midi_as_note_sequence(
+        mid_path.numpy().decode("utf-8")
+    )
+    # Convert to pianoroll
+    roll = seq_lib.sequence_to_pianoroll(note_sequence,
+                                         frames_per_second=frame_rate,
+                                         min_pitch=21,
+                                         max_pitch=108)
+    # Retrieve activity and onset velocities
+    midi_roll = np.stack((roll.active, roll.onset_velocities), axis=-1)
+
+    # Pedals are CC64, 66 and 67
+    pedals = roll.control_changes[:, 64: 68] / 128.0
+
+    if max_polyphony is not None:
+        polyphony_manager = MIDIRoll2Conditioning(max_polyphony)
+        midi_roll, polyphony = polyphony_manager(midi_roll)
+
+    # Split into segments
+    audio_t = 0
+    midi_t = 0
+    segment_audio = []
+    segment_rolls = []
+    segment_pedals = []
+    segment_polyphony = []
+    while midi_t + n_frames < np.shape(midi_roll)[0]:
+        segment_audio.append(audio[audio_t: audio_t + n_samples])
+        segment_rolls.append(midi_roll[midi_t: midi_t + n_frames])
+        segment_pedals.append(pedals[midi_t: midi_t + n_frames])
+
+        if max_polyphony:
+            segment_polyphony.append(polyphony[midi_t: midi_t + n_frames])
+
+        audio_t += audio_hop_size
+        midi_t += midi_hop_size
+
+    n_segments = len(segment_rolls)
+
+    if max_polyphony is None:
+        return np.array(segment_audio), np.array(segment_rolls), \
+            np.array(segment_pedals), n_segments
+    else:
+        return np.array(segment_audio), np.array(segment_rolls), \
+            np.array(segment_pedals), np.array(segment_polyphony), \
+            n_segments
+
+
+@tf.function
+def load_convert_split_data_tf(audio_path,
+                               mid_path,
+                               segment_duration,
+                               max_polyphony):
+    audio, conditioning, pedals, polyphony, n_segments = tf.py_function(
+        load_and_split_data,
+        [audio_path, mid_path, segment_duration, max_polyphony],
+        Tout=(tf.float32, tf.float32, tf.float32, tf.int32, tf.int32)
+    )
+    return {"audio": audio,
+            "conditioning": conditioning,
+            "pedal": pedals,
+            "polyphony": polyphony,
+            "n_segments": n_segments}
 
 
 def collect_garbage():

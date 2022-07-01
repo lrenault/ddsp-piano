@@ -37,6 +37,8 @@ class MIDIRoll2Conditioning(object):
         Returns:
             - conditioning (n_frames, n_synths, 2): stacked conditioning
             polyphonic vector.
+            - polyphony (n_frames): nuumber of simultaneous notes at each
+            frame in the uncompressed MIDI roll.
         """
         note_activity = roll[..., 0]
 

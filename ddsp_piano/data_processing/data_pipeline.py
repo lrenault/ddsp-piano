@@ -1,12 +1,12 @@
-import os
 import tensorflow as tf
 import ddsp_piano.io_utils as io_utils
 
 from os.path import join
 
 
-def get_first_batch(**kwargs):
-    dataset = get_training_dataset(shuffle=False,
+def get_first_batch(*args, **kwargs):
+    dataset = get_training_dataset(*args,
+                                   shuffle=False,
                                    infinite_generator=False,
                                    num_parallel_calls=1,
                                    **kwargs)
@@ -37,7 +37,8 @@ def get_test_dataset(duration=30, *args, **kwargs):
                        **kwargs)
 
 
-def get_dataset(dataset_dir,
+def get_dataset(dataset_dir="/data3/anasynth_nonbp/renault/audio_database/maestro-v3.0.0/",
+                split='train',
                 only_first_seg=False,
                 duration=3.0,
                 batch_size=6,
@@ -59,7 +60,7 @@ def get_dataset(dataset_dir,
     """
     # Init tf.dataset from .csv file
     dataset, n_examples, piano_models = io_utils.dataset_from_csv(
-        join(dataset_dir, "maestro-v3.0.0.csv")
+        join(dataset_dir, "maestro-v3.0.0.csv"), split=split
     )
     # Shapes definition
     n_frames = int(duration * frame_rate)
@@ -102,16 +103,15 @@ def get_dataset(dataset_dir,
                 audio=sample["audio"][0],
                 conditioning=sample["conditioning"][0],
                 pedal=sample["pedal"][0],
-                polyphony=sample["polyphony"][0],
-                conditioning=sample["conditioning"][0],
+                polyphony=tf.reduce_max(sample["polyphony"][0]),
                 piano_model=sample["piano_model"]),
             num_parallel_calls=num_parallel_calls)
 
         # Filter out segments with polyphony exceeding supported polyphony
         if filter_over_polyphony:
             dataset = dataset.filter(
-                lambda *sample: tf.reduce_max(sample["polyphony"]) <= max_polyphony)
-
+                lambda *sample: sample["polyphony"] <= max_polyphony
+            )
         # Remove polyphony entry
         dataset = dataset.map(
             lambda *sample:
@@ -134,8 +134,8 @@ def get_dataset(dataset_dir,
         # Filter out segments with polyphony exceeding supported polyphony
         if filter_over_polyphony:
             dataset = dataset.filter(
-                lambda *sample: tf.reduce_max(sample[3]) <= max_polyphony)
-
+                lambda *sample: tf.reduce_max(sample[3]) <= max_polyphony
+            )
         # Rename keys
         dataset = dataset.map(
             lambda *sample: {
@@ -170,12 +170,3 @@ def get_dataset(dataset_dir,
     dataset = dataset.with_options(options)
 
     return dataset
-
-
-if __name__ == '__main__':
-    import time
-    start = time.time()
-    batch = get_first_batch("/data3/anasynth_nonbp/renault/audio_database/maestro-v3.0.0/")
-    end = time.time()
-    print(batch, '\n', "Pipeline executed in {} s.".format(end - start))
-    import pdb; pdb.set_trace()
