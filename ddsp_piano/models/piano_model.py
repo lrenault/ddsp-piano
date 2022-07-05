@@ -36,6 +36,22 @@ class PianoModel(Model):
                                                     **kwargs)
         self._losses_dict['regularization_loss'] = tf.reduce_sum(self.losses)
 
+    def alternate_training(self, first_phase=True):
+        """Toggle trainability of submodules for the first or second training
+        phase."""
+        for module in [self.z_encoder,
+                       self.note_release,
+                       self.context_network,
+                       self.monophonic_network,
+                       self.reverb_model]:
+            if module is not None:
+                module.trainable = first_phase
+
+        for module in [self.inharm_model,
+                       self.detuner]:
+            if module is not None:
+                module.trainable = not first_phase
+
     def compute_global_features(self, features, training):
         """Call all modules computing global features."""
         if self.z_encoder is not None:
@@ -60,7 +76,7 @@ class PianoModel(Model):
         """Extract audio output tensor from outputs dict of call()."""
         return outputs['audio_synth']
 
-    def call(self, features, training=False):
+    def call(self, features, training=True):
         # Compute global features
         features = self.compute_global_features(features, training=training)
 

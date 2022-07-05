@@ -195,7 +195,7 @@ class ParametricTuning(tfkl.Layer):
 class F0ProcessorCell(tfkl.Layer):
     """Custom RNN cell for extending MIDI note signals during a trainable
     release time.
-    Params:
+    Args:
         - frame_rate (int): number of frames per second.
     """
 
