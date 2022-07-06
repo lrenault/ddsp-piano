@@ -22,6 +22,7 @@ class PianoModel(Model):
         self.z_encoder = z_encoder
         self.note_release = note_release
         self.context_network = context_network
+        self.parallelizer = parallelizer
         self.monophonic_network = monophonic_network
         self.inharm_model = inharm_model
         self.detuner = detuner
@@ -64,6 +65,8 @@ class PianoModel(Model):
 
     def compute_monophonic_features(self, features, training):
         """Call all modules computing monophonic features."""
+        if self.note_release is not None:
+            features.update(self.note_release(features, training=training))
         if self.inharm_model is not None:
             features.update(self.inharm_model(features, training=training))
         if self.detuner is not None:

@@ -1,8 +1,9 @@
 import ddsp
 import tensorflow as tf
+from ddsp.training.nn import Normalize
 from ddsp_piano.data_processing.data_pipeline import get_first_batch
+from ddsp_piano.models.piano_model import PianoModel
 from ddsp_piano.modules import sub_modules, losses
-from ddsp_piano.modules.piano_model import PianoModel
 from ddsp_piano.modules.inharm_synth import InHarmonic, MultiInharmonic
 
 tfkl = tf.keras.layers
@@ -98,8 +99,11 @@ def build_model(batch_size=6,
                 frame_rate=250,
                 sample_rate=16000,
                 reverb_duration=1.5):
-    z_encoder = sub_modules.OneHotZEncoder(n_instruments=n_piano_models)
-    note_release = tfkl.RNN(sub_modules.F0ProcessorCell(frame_rate=frame_rate))
+    # Self-contained sub-modules
+    z_encoder = sub_modules.OneHotZEncoder(n_instruments=n_piano_models,
+                                           z_dim=piano_embedding_dim,
+                                           n_frames=int(duration * frame_rate))
+    note_release = sub_modules.NoteRelease(frame_rate=frame_rate)
     parallelizer = sub_modules.Parallelizer(n_synths=n_synths)
     inharm_model = sub_modules.InharmonicityNetwork()
     detuner = sub_modules.Detuner(n_substrings=n_substrings)
@@ -107,17 +111,21 @@ def build_model(batch_size=6,
         n_instruments=n_piano_models,
         reverb_length=int(reverb_duration * sample_rate)
     )
-    context_network = tf.keras.Sequential(
+    # Neural modules
+    context_network = sub_modules.ContextNetwork(
         name='context_net',
         layers=[tfkl.Dense(32, activation=tf.nn.leaky_relu),
-                tfkl.GRU(64, return_sequences=True)]
+                tfkl.GRU(64, return_sequences=True),
+                Normalize('layer')]
     )
-    monophonic_network = tf.keras.Sequential(
+    monophonic_network = sub_modules.MonophonicNetwork(
         name='mono_net',
         layers=[tfkl.Dense(128, activation=tf.nn.leaky_relu),
                 tfkl.GRU(192, return_sequences=True),
-                tfkl.Dense(192, activation=tf.nn.leaky_relu)]
+                tfkl.Dense(192, activation=tf.nn.leaky_relu),
+                Normalize('layer')]
     )
+
     processor_group = build_polyphonic_processor_group(
         n_synths=n_synths,
         n_substrings=n_substrings,
@@ -154,5 +162,5 @@ def build_model(batch_size=6,
 
 
 if __name__ == '__main__':
-    pg = build_polyphonic_processor_group()
+    model = build_model()
     import pdb; pdb.set_trace()

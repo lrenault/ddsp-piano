@@ -5,7 +5,167 @@ from ddsp.training import nn
 tfkl = tf.keras.layers
 
 
-class InharmonicityNetwork(tfkl.Layer):
+class ContextNetwork(nn.OutputSplitsLayer):
+    """Sequential model for computing the context vector from the global inputs
+    - Wrapped inside a DictLayer for named inputs compatibility.
+    Args:
+        - layers (list(tfkl.Layer)): list of neural layers inside the
+        Sequential model.
+    """
+
+    def __init__(self,
+                 layers,
+                 output_splits=(('context', 32),),
+                 **kwargs):
+        super(ContextNetwork, self).__init__(output_splits=output_splits,
+                                             **kwargs)
+        self.model = tf.keras.Sequential(layers=layers)
+
+    @property
+    def layers(self):
+        return self.model.layers
+
+    def collapse_last_axis(self, x, axis=-2):
+        # Merge last axis of the tensor 'x', starting from axis 'axis'
+        shape = tf.shape(x)
+        new_shape = tf.concat(
+            [shape[:axis], [tf.reduce_prod(shape[axis:])]],
+            axis=0
+        )
+        return tf.reshape(x, new_shape)
+
+    def compute_output(self, conditioning, pedal, z):
+        """Forward pass.
+        Args:
+            - conditioning (batch, n_frames, n_synths, 2): active pitch and
+            onset velocity conditioning.
+            - pedal (batch, n_frames, 4): pedal signals inputs.
+            - z (batch, n_frames, z_dim): model embedding pooled over time.
+        """
+        x = tf.concat([self.collapse_last_axis(conditioning), pedal, z],
+                      axis=-1)
+        x = self.model(x)
+        return x
+
+
+class MonophonicNetwork(nn.OutputSplitsLayer):
+    """Sequential model for computing monophonic synthesizer controls from the
+    parallelized monophonic inputs. Wrapped inside a DictLayer for named inputs
+    compatibility.
+    Args:
+        - layers (list(tfkl.Layer)): list of neural layers inside the Sequen-
+        tial model.
+    """
+
+    def __init__(self,
+                 layers,
+                 output_splits=(('amplitudes', 1),
+                                ('harmonic_distribution', 96),
+                                ('magnitudes', 64)),
+                 **kwargs):
+        super(MonophonicNetwork, self).__init__(output_splits=output_splits,
+                                                **kwargs)
+        self.model = tf.keras.Sequential(layers=layers)
+        self.midi_norm = 128.
+
+    @property
+    def layers(self):
+        return self.model.layers
+
+    def compute_output(self, conditioning, extended_pitch, context):
+        """Forward parallelized monophonic inputs through the model.
+        Args:
+            - conditioning (batch * n_synths, n_frames, 2): parallelized active
+            and onset conditioning.
+            - extended_pitch (batch * n_synths, n_frames, 1): parallelized
+            active prolonged pitch conditioning.
+            - context (batch * n_synths, n_frames, context_dim): context signal
+        """
+        # Normalize and concatenate inputs
+        x = tf.concat([extended_pitch / self.midi_norm,
+                       conditioning / [self.midi_norm, 1.],
+                       context],
+                      axis=-1)
+        # Forward pass
+        x = self.model(x)
+
+        return x
+
+
+class Parallelizer(tfkl.Layer):
+    """Module for merging and unmerge the batch and polyphony axis of features.
+    Args:
+        - n_synths (int): size of polypohny axis.
+    """
+
+    def __init__(self, n_synths=16, **kwargs):
+        super(Parallelizer, self).__init__(**kwargs)
+        self.n_synths = n_synths
+
+    def build(self, input_shape):
+        self.batch_size = input_shape[0]
+
+    def put_polyphony_axis_at_first(self, x):
+        """Reshape feature before calling parallelize"""
+        if len(x.shape) == 3:
+            # Create the polyphony axis and share value over all mono channels
+            x = tf.repeat(x[tf.newaxis, ...], repeats=self.n_synths, axis=0)
+
+        elif len(x.shape) == 4:
+            # Put polyphony axis as the first dimension
+            x = tf.transpose(x, [2, 0, 1, 3])
+
+        return x
+
+    def parallelize_feature(self, x):
+        # Merge the polyphony and batch axis (which are the first two axis)
+        shape = tf.shape(x)
+        new_shape = tf.concat(
+            [[self.n_synths * shape[1]], shape[2:]],
+            axis=0
+        )
+        return tf.reshape(x, new_shape)
+
+    def unparallelize_feature(self, x):
+        # Disentangle batch and polyphony axis
+        shape = tf.shape(x)
+        new_shape = tf.concat(
+            [[self.n_synths, shape[0] // self.n_synths], shape[1:]],
+            axis=0
+        )
+        return tf.reshape(x, new_shape)
+
+    def parallelize(self, features,
+                    keys=('conditioning',
+                          'context',
+                          'global_inharm',
+                          'global_detuning')):
+        for k in keys:
+            features[k] = self.put_polyphony_axis_at_first(features[k])
+            features[k] = self.parallelize_feature(features[k])
+        return features
+
+    def unparallelize(self, features,
+                      keys=('f0_hz',
+                            'inharm_coef',
+                            'amplitudes',
+                            'harmonic_distribution',
+                            'magnitudes')):
+        """Disentangle batch and polyphony axis and distribute features as
+        monophonic controls.
+        Args:
+            - features (dict(Tensors)): named features and controls.
+            - keys (list(string)): list of feature keys to unparallelize and
+            create monophonic controls.
+        """
+        for k in keys:
+            features[k] = self.unparallelize_feature(features[k])
+            for i in range(self.n_synths):
+                features[k + f'_{i}'] = features[k][i]
+        return features
+
+
+class InharmonicityNetwork(nn.DictLayer):
     """ Compute inharmonicity coefficient corresponding to MIDI notes. """
 
     def __init__(self, name="inharmonicity_net", **kwargs):
@@ -63,16 +223,18 @@ class InharmonicityNetwork(tfkl.Layer):
 
         super(InharmonicityNetwork, self).build(input_shape)
 
-    def call(self, notes, global_inharm=None):
+    def call(self, extended_pitch, global_inharm=None) -> ['inharm_coef']:
         """ Compute inharmonicity coefficient corresponding to input pitch note
         Args:
-            - notes (batch, n_frames, 1): input MIDI note conditioning signal
-            - global_inharm (batch, 1, 1): fine-tune from piano type
+            - extended_pitch (batch, n_frames, 1): input MIDI note conditioning
+            signal.
+            - global_inharm (batch, 1, 1): fine-tuning from a specific piano
+            model.
         Returns:
-            - inharm_coef (batch, n_frames, 1): inharmonicity coefficient
+            - inharm_coef (batch, n_frames, 1): inharmonicity coefficient.
         """
         # Inharmonicity tessitura model
-        reduced_notes = notes / self.midi_norm
+        reduced_notes = extended_pitch / self.midi_norm
         slopes = self.slopes + self.slopes_modifier
         offsets = self.offsets + self.offsets_modifier
 
@@ -87,6 +249,7 @@ class InharmonicityNetwork(tfkl.Layer):
                 [tf.zeros_like(global_inharm), global_inharm],
                 axis=-1
             )
+            import pdb; pdb.set_trace()
             bridges_asymptotes += self.model_specific_weight * global_inharm
 
         # Compute inharmonicity factor (batch, n_frames, 1)
@@ -97,45 +260,49 @@ class InharmonicityNetwork(tfkl.Layer):
         return inharm_coef
 
 
-class Detuner(tfkl.Layer):
+class Detuner(nn.DictLayer):
     """ Compute a detuning factor for each input MIDI note.
     Args:
         - n_substrings (int): number of piano strings per note.
+        - use_detune (bool): use the predicted detuning for converting MIDI
+        pitch to Hz.
     """
 
-    def __init__(self, n_substrings=2, **kwargs):
-        super(Detuner, self).__init__(**kwargs)
+    def __init__(self, n_substrings=2, use_detune=True, name='detuner',
+                 **kwargs):
+        super(Detuner, self).__init__(name=name, **kwargs)
         self.n_substrings = n_substrings
+        self.use_detune = use_detune
 
-    def build(self, input_shape):
         self.tanh = tf.keras.activations.tanh
-        self.net = tfkl.Dense(self.n_substrings,
-                              kernel_initializer='zeros',
-                              bias_initializer='zeros',
-                              trainable=False)
-        self.net.build(input_shape)
-        super(Detuner, self).build(input_shape)
+        self.layer = tfkl.Dense(self.n_substrings,
+                                kernel_initializer='zeros',
+                                bias_initializer='zeros',
+                                trainable=False)
 
-    def centered_sigmoid(self, x, max_value=1.):
-        return 2 * max_value * (tf.math.sigmoid(x) - 0.5)
-
-    def call(self, notes, global_detuning):
+    def call(self, extended_pitch, global_detuning=None) -> ['f0_hz']:
         """ Forward pass
         Args:
-            - notes (batch, ..., 1): input active notes.
+            - extended_pitch (batch, ..., 1): input active notes.
             - global_detuning (batch, ..., 1): global detuning from
             piano type.
         Returns:
             - detuned_factors (batch, ..., n_substrings): detuning factor
             for each substring.
          """
-        detuned_factors = self.tanh(self.net(notes / 128.))
-        global_detuning = self.tanh(global_detuning)
+        if self.use_detune:
+            detuning = self.tanh(self.layer(extended_pitch / 128.))
 
-        return detuned_factors + global_detuning
+            if global_detuning is not None:
+                global_detuning = self.tanh(global_detuning)
+                detuning += global_detuning
+
+            extended_pitch += detuning
+
+        return midi_to_hz(extended_pitch)
 
 
-class ParametricTuning(tfkl.Layer):
+class ParametricTuning(nn.DictLayer):
     """Parametric model for piano tuning, for note inharmonicity and detuning
     according to Rigaud et al. 'A parametric model of piano tuning' (DAFx-11)
     Params:
@@ -151,8 +318,9 @@ class ParametricTuning(tfkl.Layer):
         - inharm_coef (batch, n_frames, 1): inharmonicity coefficient.
     """
 
-    def __init__(self, **kwargs):
-        super(ParametricTuning, self).__init__(**kwargs)
+    def __init__(self, name='parametric_tuniing', **kwargs):
+        super(ParametricTuning, self).__init__(name=name, **kwargs)
+
         # Inharmonicity network
         self.inharm_model = InharmonicityNetwork()
 
@@ -183,11 +351,11 @@ class ParametricTuning(tfkl.Layer):
 
         return detuning
 
-    def call(self, notes):
-        inharm_coef = self.inharm_model(notes)
-        detuning = self.get_deviation_from_ET(notes)
+    def call(self, extended_pitch) -> ['f0_hz', 'inharm_coef']:
+        inharm_coef = self.inharm_model(extended_pitch)
+        detuning = self.get_deviation_from_ET(extended_pitch)
 
-        f0_hz = midi_to_hz(notes) * detuning
+        f0_hz = midi_to_hz(extended_pitch) * detuning
 
         return f0_hz, inharm_coef
 
@@ -234,39 +402,34 @@ class F0ProcessorCell(tfkl.Layer):
         return midi_note, [updated_state]
 
 
+class NoteRelease(nn.DictLayer):
+    """NoteRelease dict layer for extending the active pitch conditioning.
+    Based on the custom RNN F0ProcessorCell"""
+
+    def __init__(self, frame_rate=250, name='note_release', **kwargs):
+        super(NoteRelease, self).__init__(name=name, **kwargs)
+        self.layer = tfkl.RNN(F0ProcessorCell(frame_rate=frame_rate))
+
+    def call(self, conditioning) -> ['extended_pitch']:
+        active_pitch = conditioning[..., 0:1]
+        extended_pitch = self.layer(active_pitch)
+
+        return extended_pitch
+
+
 class OneHotZEncoder(nn.DictLayer):
     """ Transforms one-hot instrument model into a Z embedding.
     Args:
-        - instrument_id_key (str): input name of instrument id in the input
-        dictionary.
         - n_instruments (int): number of instrument to be supported.
         - z_dim (int): dimension of z embedding.
-        - output_splits (list(key, int)): additional model-specific feature to
-        compute (key and dimension).
         - n_frames (int): pool embedding value over this number of time frames.
     """
 
-    def __init__(self,
-                 instrument_id_key='piano_model',
-                 n_instruments=16,
-                 z_dim=16,
-                 output_splits=(('global_inharm', 1),
-                                ('global_detuning', 1)),
-                 n_frames=None,
-                 **kwargs):
-        self.n_frames = n_frames
+    def __init__(self, n_instruments=16, z_dim=16, n_frames=None, **kwargs):
+        super(OneHotZEncoder, self).__init__(**kwargs)
         self.n_instruments = n_instruments
         self.z_dim = z_dim
-
-        output_splits += (('z', z_dim),)
-        self.output_splits = output_splits
-        self.output_dim = sum([v[1] for v in self.output_splits])
-
-        super(OneHotZEncoder, self).__init__(
-            input_keys=[instrument_id_key, ],
-            output_keys=[v[0] for v in self.output_splits],
-            **kwargs
-        )
+        self.n_frames = n_frames
 
     def build(self, input_shape):
         super(OneHotZEncoder, self).build(input_shape)
@@ -280,11 +443,11 @@ class OneHotZEncoder(nn.DictLayer):
                                                output_dim=1,
                                                input_length=1)
 
-    def call(self, instrument_id):
+    def call(self, piano_model) -> ['z', 'global_inharm', 'global_detuning']:
         # Compute Z embedding from instrument id
-        z = self.embedding(instrument_id)
-        global_inharm = self.inharm_embedding(instrument_id)
-        global_detuning = self.detune_embedding(instrument_id)
+        z = self.embedding(piano_model)
+        global_inharm = self.inharm_embedding(piano_model)
+        global_detuning = self.detune_embedding(piano_model)
 
         # Add time axis
         if len(z.shape) == 2:
@@ -298,10 +461,7 @@ class OneHotZEncoder(nn.DictLayer):
             global_inharm = resample(global_inharm, self.n_frames)
             global_detuning = resample(global_detuning, self.n_frames)
 
-        # Name outputs
-        return {"z": z,
-                "global_inharm": global_inharm,
-                "global_detuning": global_detuning}
+        return z, global_inharm, global_detuning
 
 
 class MultiInstrumentReverb(nn.DictLayer):
@@ -314,16 +474,11 @@ class MultiInstrumentReverb(nn.DictLayer):
     """
 
     def __init__(self,
-                 instrument_id_key='piano_model',
                  n_instruments=16,
                  reverb_length=32000,
                  inference=False,
                  **kwargs):
-        super(MultiInstrumentReverb, self).__init__(
-            input_keys=[instrument_id_key, ],
-            output_keys=['reverb_ir', ],
-            **kwargs
-        )
+        super(MultiInstrumentReverb, self).__init__(**kwargs)
         self.reverb_length = reverb_length
         self.n_instruments = n_instruments
         self.inference = inference
@@ -351,9 +506,9 @@ class MultiInstrumentReverb(nn.DictLayer):
         mask = tf.concat([tf.ones(decay_start), mask], 0)
         return ir * mask[tf.newaxis, ...]
 
-    def call(self, instrument_id):
+    def call(self, piano_model) -> ['reverb_ir']:
         """Get reverb IR from instrument id"""
-        ir = self.reverb_dict(instrument_id)
+        ir = self.reverb_dict(piano_model)
 
         if len(ir.shape) == 3:
             ir = ir[:, 0]
@@ -363,3 +518,4 @@ class MultiInstrumentReverb(nn.DictLayer):
             ir = self.exponential_decay_mask(ir)
 
         return ir
+

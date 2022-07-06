@@ -82,8 +82,8 @@ def get_dataset(dataset_dir="/data3/anasynth_nonbp/renault/audio_database/maestr
             sample,
             piano_model=tf.where(tf.equal(piano_models,
                                           sample['year']))[0]),
-        num_parallel_calls=num_parallel_calls)
-
+        num_parallel_calls=num_parallel_calls
+    )
     # Load segments of audio and MIDI data
     dataset = dataset.map(
         lambda sample: dict(
@@ -93,8 +93,8 @@ def get_dataset(dataset_dir="/data3/anasynth_nonbp/renault/audio_database/maestr
                 tf.strings.join([dataset_dir, sample['midi_filename']]),
                 duration,
                 max_polyphony)),
-        num_parallel_calls=num_parallel_calls)
-
+        num_parallel_calls=num_parallel_calls
+    )
     # Split or replace track dataset into segment dataset
     if only_first_seg:
         # Only keep the first segment of each track
@@ -105,8 +105,8 @@ def get_dataset(dataset_dir="/data3/anasynth_nonbp/renault/audio_database/maestr
                 pedal=sample["pedal"][0],
                 polyphony=tf.reduce_max(sample["polyphony"][0]),
                 piano_model=sample["piano_model"]),
-            num_parallel_calls=num_parallel_calls)
-
+            num_parallel_calls=num_parallel_calls
+        )
         # Filter out segments with polyphony exceeding supported polyphony
         if filter_over_polyphony:
             dataset = dataset.filter(
@@ -116,8 +116,8 @@ def get_dataset(dataset_dir="/data3/anasynth_nonbp/renault/audio_database/maestr
         dataset = dataset.map(
             lambda *sample:
                 {key: sample[key] for key in sample if key != "polyphony"},
-            num_parallel_calls=num_parallel_calls)
-
+            num_parallel_calls=num_parallel_calls
+        )
     else:
         # Create a new dataset by making an entry for each segment
         dataset = dataset.flat_map(
@@ -129,8 +129,8 @@ def get_dataset(dataset_dir="/data3/anasynth_nonbp/renault/audio_database/maestr
                 tf.data.Dataset.from_tensor_slices(
                     tf.repeat(sample["piano_model"],
                               repeats=sample["n_segments"]))
-            )))
-
+            ))
+        )
         # Filter out segments with polyphony exceeding supported polyphony
         if filter_over_polyphony:
             dataset = dataset.filter(
@@ -143,8 +143,8 @@ def get_dataset(dataset_dir="/data3/anasynth_nonbp/renault/audio_database/maestr
                 "conditioning": sample[1],
                 "pedal": sample[2],
                 "piano_model": sample[4][..., tf.newaxis]},
-            num_parallel_calls=num_parallel_calls)
-
+            num_parallel_calls=num_parallel_calls
+        )
     # Infinite generator
     if infinite_generator:
         dataset = dataset.repeat(count=-1)
