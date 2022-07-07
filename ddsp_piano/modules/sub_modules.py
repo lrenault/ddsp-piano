@@ -249,7 +249,6 @@ class InharmonicityNetwork(nn.DictLayer):
                 [tf.zeros_like(global_inharm), global_inharm],
                 axis=-1
             )
-            import pdb; pdb.set_trace()
             bridges_asymptotes += self.model_specific_weight * global_inharm
 
         # Compute inharmonicity factor (batch, n_frames, 1)
@@ -408,7 +407,8 @@ class NoteRelease(nn.DictLayer):
 
     def __init__(self, frame_rate=250, name='note_release', **kwargs):
         super(NoteRelease, self).__init__(name=name, **kwargs)
-        self.layer = tfkl.RNN(F0ProcessorCell(frame_rate=frame_rate))
+        self.layer = tfkl.RNN(F0ProcessorCell(frame_rate=frame_rate),
+                              return_sequences=True)
 
     def call(self, conditioning) -> ['extended_pitch']:
         active_pitch = conditioning[..., 0:1]
@@ -518,4 +518,3 @@ class MultiInstrumentReverb(nn.DictLayer):
             ir = self.exponential_decay_mask(ir)
 
         return ir
-

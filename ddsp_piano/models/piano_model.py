@@ -31,6 +31,10 @@ class PianoModel(Model):
 
         self.loss_objs = ddsp.core.make_iterable(losses)
 
+    @property
+    def n_synths(self):
+        return self.parallelizer.n_synths
+
     def _update_losses_dict(self, loss_objs, *args, **kwargs):
         super(PianoModel, self)._update_losses_dict(loss_objs,
                                                     *args,
@@ -79,7 +83,7 @@ class PianoModel(Model):
         """Extract audio output tensor from outputs dict of call()."""
         return outputs['audio_synth']
 
-    def call(self, features, training=True):
+    def call(self, features, training=False):
         # Compute global features
         features = self.compute_global_features(features, training=training)
 

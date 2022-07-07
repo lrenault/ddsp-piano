@@ -9,13 +9,10 @@ from datetime import datetime
 from ddsp.training import trainers, train_util, summaries
 from tensorflow.summary import create_file_writer, scalar
 
-from polyphonic_model import build_model
-from admis.training.data_pipeline \
+from ddsp_piano.models.default_model import get_model, build_model
+from ddsp_piano.data_processing.data_pipeline \
     import get_training_dataset, get_validation_dataset
-from admis.io_utils import lock_gpu, str2bool, collect_garbage
-
-DATARD_PATH = os.environ['DATARD_PATH']
-base_datasets_path = "audio_database/maestro-v3.0.0/"
+from ddsp_piano.io_utils import lock_gpu, str2bool, collect_garbage
 
 
 def process_args():
@@ -23,75 +20,65 @@ def process_args():
     parser = argparse.ArgumentParser()
 
     parser.add_argument('--batch_size', type=int, default=6,
-                        help="Number of elements per batch. (default: %(default)s)")
-
-    parser.add_argument('--n_synths', type=int, default=16,
-                        help="Polyphony capacity of the model. (default: %(default)s)")
-
-    parser.add_argument('--config_id', type=str, default="default",
-                        help="Select training config. (default: %(default)s)")
+                        help="Number of elements per batch.\
+                        (default: %(default)s)")
 
     parser.add_argument('--steps_per_epoch', type=int, default=16,
-                        help="Number of steps of gradient descent per epoch. (default: %(default)s)")
+                        help="Number of steps of gradient descent per epoch.\
+                        (default: %(default)s)")
 
     parser.add_argument('--epochs', type=int, default=128,
                         help="Number of epochs. (default: %(default)s)")
 
-    parser.add_argument('--jz', type=str2bool, default=False,
-                        help="Train on Jean-Zay. (default: %(default)s)")
-
     parser.add_argument('--restore', type=str, default=None,
-                        help="Restore from a pre-trained model. (default: %(default)s)")
+                        help="Restore training step from a saved folder.\
+                        (default: %(default)s)")
 
     parser.add_argument('--train_inharm', type=str2bool, default=False,
-                        help="Only train inharmonicity sub-network. (default: %(default)s)")
+                        help="Second step training phase.\
+                        (default: %(default)s)")
 
-    parser.add_argument('--exp_dir', type=str,
+    parser.add_argument('maestro_path', type=str,
+                        help="Path to the MAESTRO dataset")
+
+    parser.add_argument('exp_dir', type=str,
                         help="Path for experiments results and log export",
-                        default=join(DATARD_PATH,
-                                     base_datasets_path,
+                        default=join("/data3/anasynth_nonbp/renault/",
+                                     "audio_database/maestro-v3.0.0/"
                                      "models/admis/"))
     return parser.parse_args()
 
 
 def main(args):
-    # Lock GPU(s)
+    # TO REMOVE
     lock_gpu()
 
-    # Initialize the datasets
-    training_dataset = get_training_dataset(
-        batch_size=args.batch_size,
-        max_polyphony=args.n_synths,
-        jz=args.jz,
-        one_piano=("2009" in args.config_id)
-    )
-    val_dataset = get_validation_dataset(
-        batch_size=args.batch_size,
-        max_polyphony=args.n_synths,
-        jz=args.jz,
-        one_piano=("2009" in args.config_id)
-    )
     # Build/Load and put the model in the available strategy scope
     strategy = train_util.get_strategy()
     with strategy.scope():
-        model = build_model(batch_size=args.batch_size,
-                            n_synths=args.n_synths,
-                            config_id=args.config_id,
-                            use_detune=args.train_inharm,
-                            jz=args.jz)
+        model = build_model(get_model(batch_size=args.batch_size,
+                                      use_detune=args.train_inharm))
         trainer = trainers.Trainer(
             model=model,
             strategy=strategy,
             learning_rate=1e-5 if args.train_inharm else 1e-3
         )
+        # Restore model and optimizer states
         if args.restore is not None:
             trainer.restore(args.restore)
             print(f"Restored model from {args.restore}")
 
+        # Toggle submodules trainability for second training phase
         if args.train_inharm:
             # TODO: use alternate optimizer
             model.alternate_training()
             model.summary()
+
+        # Dataset loading and distribution
+        training_dataset = get_training_dataset(batch_size=args.batch_size,
+                                                max_polyphony=model.n_synths)
+        val_dataset = get_validation_dataset(batch_size=args.batch_size,
+                                             max_polyphony=model.n_synths)
 
         training_dataset = trainer.distribute_dataset(training_dataset)
         val_dataset = trainer.distribute_dataset(val_dataset)
@@ -151,9 +138,11 @@ def main(args):
                 shutil.rmtree(join(exp_dir, "last_iter"))
                 trainer.save(join(exp_dir, "last_iter"))
 
-                # Evaluate on validation data
+                # Skip validation during early training
                 if trainer.step < 60000:
                     continue
+
+                # Evaluate on validation data
                 print("Validation...")
                 val_outs_summary = None
                 val_loss = 0.
@@ -164,7 +153,7 @@ def main(args):
                     # Validation step
                     outputs, val_losses = model(val_batch,
                                                 return_losses=True,
-                                                training=False)
+                                                training=True)
                     # Retrieve loss values
                     val_loss += float(val_losses['total_loss'])
                     val_regularization += float(val_losses['regularization_loss'])

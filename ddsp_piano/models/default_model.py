@@ -11,7 +11,7 @@ tfkl = tf.keras.layers
 
 def build_polyphonic_processor_group(n_synths=16,
                                      n_substrings=2,
-                                     n_piano_models=1,
+                                     n_piano_models=10,
                                      sample_rate=16000,
                                      duration=3,
                                      reverb_duration=None,
@@ -88,17 +88,16 @@ def build_polyphonic_processor_group(n_synths=16,
     return processor_group
 
 
-def build_model(batch_size=6,
-                duration=3,
-                inference=False,
-                n_synths=16,
-                n_substrings=2,
-                n_piano_models=1,
-                piano_embedding_dim=16,
-                n_noise_filter_banks=64,
-                frame_rate=250,
-                sample_rate=16000,
-                reverb_duration=1.5):
+def get_model(duration=3,
+              inference=False,
+              n_synths=16,
+              n_substrings=2,
+              n_piano_models=1,
+              piano_embedding_dim=16,
+              n_noise_filter_banks=64,
+              frame_rate=250,
+              sample_rate=16000,
+              reverb_duration=1.5):
     # Self-contained sub-modules
     z_encoder = sub_modules.OneHotZEncoder(n_instruments=n_piano_models,
                                            z_dim=piano_embedding_dim,
@@ -152,6 +151,10 @@ def build_model(batch_size=6,
                                     name='audio_stft_loss'),
                 losses.ReverbRegularizer(name='reverb_regularizer')]
     )
+    return model
+
+
+def build_model(model, batch_size=6):
     # Model building
     batch = get_first_batch(batch_size=batch_size)
     _ = model(batch)
@@ -162,5 +165,5 @@ def build_model(batch_size=6,
 
 
 if __name__ == '__main__':
-    model = build_model()
+    model = build_model(get_model())
     import pdb; pdb.set_trace()
