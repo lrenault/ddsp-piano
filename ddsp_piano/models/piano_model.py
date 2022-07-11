@@ -42,20 +42,29 @@ class PianoModel(Model):
         self._losses_dict['regularization_loss'] = tf.reduce_sum(self.losses)
 
     def alternate_training(self, first_phase=True):
-        """Toggle trainability of submodules for the first or second training
-        phase."""
-        for module in [self.z_encoder,
-                       self.note_release,
+        """Toggle trainability of submodules for the 1st or 2nd training phase.
+        Args:
+            - first_phase (bool): whether using the 1st phase training strategy
+        """
+        # Modules involved with partial frequency computing are frozen during
+        # the first training phase strategy.
+        for module in [self.inharm_model,
+                       self.detuner]:
+            if module is not None:
+                module.trainable = not first_phase
+
+        self.z_encoder.alternate_training(first_phase)
+
+        # Modules not involved in freq computing have inversed trainability
+        for module in [self.note_release,
                        self.context_network,
                        self.monophonic_network,
                        self.reverb_model]:
             if module is not None:
                 module.trainable = first_phase
 
-        for module in [self.inharm_model,
-                       self.detuner]:
-            if module is not None:
-                module.trainable = not first_phase
+        # Compute multiple note signals only when learning detuner weights
+        self.detuner.use_detune = not first_phase
 
     def compute_global_features(self, features, training):
         """Call all modules computing global features."""
@@ -88,13 +97,13 @@ class PianoModel(Model):
         features = self.compute_global_features(features, training=training)
 
         # Merge batch axis with polyphony axis for parallelized computation
-        features = self.parallelizer.parallelize(features)
+        features = self.parallelizer(features, parallelize=True)
 
         # Compute monophonic features
         features = self.compute_monophonic_features(features, training=training)
 
         # Disentangle polyphony and batch axis
-        features = self.parallelizer.unparallelize(features)
+        features = self.parallelizer(features, parallelize=False)
 
         # Processor group call
         pg_out = self.processor_group(features, return_outputs_dict=True)

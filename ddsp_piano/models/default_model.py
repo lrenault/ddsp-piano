@@ -1,10 +1,10 @@
 import ddsp
 import tensorflow as tf
 from ddsp.training.nn import Normalize
-from ddsp_piano.data_processing.data_pipeline import get_first_batch
+from ddsp_piano.data_processing.data_pipeline import get_first_batch, get_dummy_data
 from ddsp_piano.models.piano_model import PianoModel
 from ddsp_piano.modules import sub_modules, losses
-from ddsp_piano.modules.inharm_synth import InHarmonic, MultiInharmonic
+from ddsp_piano.modules.inharm_synth import MultiInharmonic
 
 tfkl = tf.keras.layers
 
@@ -36,19 +36,11 @@ def build_polyphonic_processor_group(n_synths=16,
     reverb_length = int(reverb_duration * sample_rate)
 
     # Init synthesizers
-    noise = ddsp.synths.FilteredNoise(n_samples=n_samples,
-                                      name='noise')
-    if n_substrings > 1:
-        additive = MultiInharmonic(name='additive',
-                                   n_substrings=n_substrings,
-                                   n_samples=n_samples,
-                                   sample_rate=sample_rate,
-                                   inference=inference)
-    else:
-        additive = InHarmonic(name='additive',
-                              n_samples=n_samples,
-                              sample_rate=sample_rate,
-                              inference=inference)
+    noise = ddsp.synths.FilteredNoise(name='noise', n_samples=n_samples)
+    additive = MultiInharmonic(name='additive',
+                               n_samples=n_samples,
+                               sample_rate=sample_rate,
+                               inference=inference)
     # DAG constructor
     dag = []
     dag.append((noise, ['magnitudes_0']))
@@ -88,11 +80,11 @@ def build_polyphonic_processor_group(n_synths=16,
     return processor_group
 
 
-def get_model(duration=3,
-              inference=False,
+def get_model(inference=False,
+              duration=3,
               n_synths=16,
               n_substrings=2,
-              n_piano_models=1,
+              n_piano_models=10,
               piano_embedding_dim=16,
               n_noise_filter_banks=64,
               frame_rate=250,
@@ -154,10 +146,12 @@ def get_model(duration=3,
     return model
 
 
-def build_model(model, batch_size=6):
-    # Model building
-    batch = get_first_batch(batch_size=batch_size)
-    _ = model(batch)
+def build_model(model, batch_size=6, first_phase=False):
+    # Toggle submodules trainability
+    model.alternate_training(first_phase=first_phase)
+    # Model building by forwarding a batch sample
+    batch = get_dummy_data(batch_size=batch_size)
+    _ = model(batch, training=True)
 
     model.summary()
 
@@ -166,4 +160,3 @@ def build_model(model, batch_size=6):
 
 if __name__ == '__main__':
     model = build_model(get_model())
-    import pdb; pdb.set_trace()

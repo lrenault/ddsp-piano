@@ -14,6 +14,45 @@ def get_first_batch(*args, **kwargs):
     return batch_value
 
 
+def get_dummy_data(batch_size=6,
+                   duration=3.0,
+                   sample_rate=16000,
+                   frame_rate=250,
+                   max_polyphony=16):
+    # Shapes definition
+    n_frames = int(duration * frame_rate)
+    n_samples = int(duration * sample_rate)
+
+    conditioning_shape = [batch_size, n_frames, max_polyphony, 2]
+    pedal_shape = [batch_size, n_frames, 4]
+    piano_model_shape = [batch_size, 1, ]
+    audio_shape = [batch_size, n_samples, ]
+
+    features = {}
+    features['conditioning'] = tf.random.uniform(
+        shape=tf.TensorShape(conditioning_shape),
+        minval=0., maxval=1.,
+        seed=0
+    )
+    features['pedal'] = tf.random.uniform(
+        shape=tf.TensorShape(pedal_shape),
+        minval=0., maxval=1.,
+        seed=0
+    )
+    features['audio'] = tf.random.uniform(
+        shape=tf.TensorShape(audio_shape),
+        minval=0., maxval=1.,
+        seed=0
+    )
+    features['piano_model'] = tf.random.uniform(
+        shape=tf.TensorShape(piano_model_shape),
+        minval=0, maxval=1, dtype=tf.int32,
+        seed=0
+    )
+
+    return features
+
+
 def get_training_dataset(*args, **kwargs):
     return get_dataset(*args, split='train', **kwargs)
 
@@ -26,7 +65,7 @@ def get_validation_dataset(*args, **kwargs):
                        **kwargs)
 
 
-def get_test_dataset(duration=30, *args, **kwargs):
+def get_test_dataset(*args, duration=30, **kwargs):
     return get_dataset(*args,
                        split='test',
                        duration=duration,
@@ -37,7 +76,7 @@ def get_test_dataset(duration=30, *args, **kwargs):
                        **kwargs)
 
 
-def get_dataset(dataset_dir="/data3/anasynth_nonbp/renault/audio_database/maestro-v3.0.0/",
+def get_dataset(dataset_dir,
                 split='train',
                 only_first_seg=False,
                 duration=3.0,
@@ -60,7 +99,8 @@ def get_dataset(dataset_dir="/data3/anasynth_nonbp/renault/audio_database/maestr
     """
     # Init tf.dataset from .csv file
     dataset, n_examples, piano_models = io_utils.dataset_from_csv(
-        join(dataset_dir, "maestro-v3.0.0.csv"), split=split
+        join(dataset_dir, "maestro-v3.0.0.csv"),
+        split=split
     )
     # Shapes definition
     n_frames = int(duration * frame_rate)
@@ -155,8 +195,8 @@ def get_dataset(dataset_dir="/data3/anasynth_nonbp/renault/audio_database/maestr
         padded_shapes={"conditioning": tf.TensorShape(conditioning_shape),
                        "pedal": tf.TensorShape(pedal_shape),
                        "audio": tf.TensorShape(audio_shape),
-                       "piano_model": tf.TensorShape(piano_model_shape)})
-
+                       "piano_model": tf.TensorShape(piano_model_shape)}
+    )
     # Drop batch if dataset exhausted and batch size is not met
     dataset = dataset.filter(
         lambda sample: tf.equal(batch_size, tf.shape(sample['audio'])[0])

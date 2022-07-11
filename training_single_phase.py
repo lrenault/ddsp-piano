@@ -5,14 +5,13 @@ import tensorflow as tf
 
 from tqdm import tqdm
 from os.path import join
-from datetime import datetime
 from ddsp.training import trainers, train_util, summaries
 from tensorflow.summary import create_file_writer, scalar
 
 from ddsp_piano.models.default_model import get_model, build_model
 from ddsp_piano.data_processing.data_pipeline \
     import get_training_dataset, get_validation_dataset
-from ddsp_piano.io_utils import lock_gpu, str2bool, collect_garbage
+from ddsp_piano.io_utils import collect_garbage
 
 
 def process_args():
@@ -30,66 +29,72 @@ def process_args():
     parser.add_argument('--epochs', type=int, default=128,
                         help="Number of epochs. (default: %(default)s)")
 
+    parser.add_argument('--lr', type=float, default=0.001,
+                        help="Learning rate. (default: %(default)s)")
+
+    parser.add_argument('--phase', type=int, default=1,
+                        help="Training phase strategy to apply. \
+                        Set to even for fine-tuning only the detuner and \
+                        inharmonicity sub-modules.\
+                        (default: %(default)s)")
+
     parser.add_argument('--restore', type=str, default=None,
                         help="Restore training step from a saved folder.\
                         (default: %(default)s)")
 
-    parser.add_argument('--train_inharm', type=str2bool, default=False,
-                        help="Second step training phase.\
-                        (default: %(default)s)")
-
     parser.add_argument('maestro_path', type=str,
-                        help="Path to the MAESTRO dataset")
+                        help="Path to the MAESTRO dataset folder.")
 
     parser.add_argument('exp_dir', type=str,
-                        help="Path for experiments results and log export",
-                        default=join("/data3/anasynth_nonbp/renault/",
-                                     "audio_database/maestro-v3.0.0/"
-                                     "models/admis/"))
+                        help="Folder to store experiment results and logs.")
+
     return parser.parse_args()
 
 
 def main(args):
-    # TO REMOVE
-    lock_gpu()
+    """Training loop script.
+    Args:
+        - batch_size (int): nb of elements per batch.
+        - steps_per_epoch (int): nb of steps of gradient descent per epoch.
+        - epochs (int): nb of epochs.
+        - restore (path): load model and optimizer states from this folder.
+        - phase (int): current training phase.
+        - maestro_path (path): maestro dataset location.
+        - exp_dir (path): folder to store experiment results and logs.
+    """
+    # Format training phase strategy
+    first_phase_strat = ((args.phase % 2) == 0)
 
     # Build/Load and put the model in the available strategy scope
     strategy = train_util.get_strategy()
     with strategy.scope():
-        model = build_model(get_model(batch_size=args.batch_size,
-                                      use_detune=args.train_inharm))
-        trainer = trainers.Trainer(
-            model=model,
-            strategy=strategy,
-            learning_rate=1e-5 if args.train_inharm else 1e-3
-        )
+        model = build_model(get_model(),
+                            batch_size=args.batch_size,
+                            first_phase=first_phase_strat)
+        trainer = trainers.Trainer(model=model,
+                                   strategy=strategy,
+                                   learning_rate=args.lr)
         # Restore model and optimizer states
         if args.restore is not None:
             trainer.restore(args.restore)
             print(f"Restored model from {args.restore}")
 
-        # Toggle submodules trainability for second training phase
-        if args.train_inharm:
-            # TODO: use alternate optimizer
-            model.alternate_training()
-            model.summary()
-
-        # Dataset loading and distribution
-        training_dataset = get_training_dataset(batch_size=args.batch_size,
-                                                max_polyphony=model.n_synths)
-        val_dataset = get_validation_dataset(batch_size=args.batch_size,
-                                             max_polyphony=model.n_synths)
-
+    # Dataset loading
+    training_dataset = get_training_dataset(args.maestro_path,
+                                            batch_size=args.batch_size,
+                                            max_polyphony=model.n_synths)
+    val_dataset = get_validation_dataset(args.maestro_path,
+                                         batch_size=args.batch_size,
+                                         max_polyphony=model.n_synths)
+    # Dataset distribution
+    with strategy.scope():
         training_dataset = trainer.distribute_dataset(training_dataset)
         val_dataset = trainer.distribute_dataset(val_dataset)
 
         train_iterator = iter(training_dataset)
 
     # Inits before the training loop
-    today = datetime.today().strftime('%Y-%m-%d-%Hh%M')
-
-    exp_dir = args.exp_dir if (args.restore is None) else args.restore
-    exp_dir = join(exp_dir, today)
+    exp_dir = join(args.exp_dir, f'phase_{args.phase}')
 
     os.makedirs(join(exp_dir, "logs"), exist_ok=True)
     os.makedirs(join(exp_dir, "last_iter"), exist_ok=True)
@@ -140,6 +145,7 @@ def main(args):
 
                 # Skip validation during early training
                 if trainer.step < 60000:
+                    collect_garbage()
                     continue
 
                 # Evaluate on validation data

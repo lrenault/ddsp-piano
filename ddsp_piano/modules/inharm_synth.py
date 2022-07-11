@@ -143,13 +143,9 @@ class InHarmonic(processors.Processor):
 
 
 class MultiInharmonic(InHarmonic):
-    """ Inharmonic synthesizer with multiple slightly detuned strings.
-    Args:
-        - n_substrings (int): number of strings per (mono) note.
-    """
+    """Inharmonic synthesizer with multiple F0 controls."""
 
-    def __init__(self, n_substrings=2, name="multi_inharmonic", **kwargs):
-        self.n_substrings = n_substrings
+    def __init__(self, name="multi_inharmonic", **kwargs):
         super(MultiInharmonic, self).__init__(name=name, **kwargs)
 
     def get_controls(self,
@@ -166,8 +162,8 @@ class MultiInharmonic(InHarmonic):
         )
         # Put back multi-f0 signal
         controls['f0_hz'] = f0_hz
-        controls['amplitudes'] /= self.n_substrings
-
+        # Divide global amplitude by the number of substrings
+        controls['amplitudes'] /= core.tf_float32(tf.shape(f0_hz)[-1])
         return controls
 
     def get_signal(self,
@@ -175,17 +171,20 @@ class MultiInharmonic(InHarmonic):
                    harmonic_distribution,
                    harmonic_shifts,
                    f0_hz):
-        sub_f0 = f0_hz[..., 0:1]
-        audio = super(MultiInharmonic, self).get_signal(amplitudes,
-                                                        harmonic_distribution,
-                                                        harmonic_shifts,
-                                                        sub_f0)
-        for substring in range(1, self.n_substrings):
-            sub_f0 = f0_hz[..., substring: substring + 1]
+        n_substrings = tf.shape(f0_hz)[-1]
+        # Audio from the first substring
+        audio = super(MultiInharmonic, self).get_signal(
+            amplitudes,
+            harmonic_distribution,
+            harmonic_shifts,
+            f0_hz[..., 0:1]
+        )
+        # Add other substrings signals
+        for substring in range(1, n_substrings):
             audio += super(MultiInharmonic, self).get_signal(
                 amplitudes,
                 harmonic_distribution,
                 harmonic_shifts,
-                sub_f0
+                f0_hz[..., substring: substring + 1]
             )
         return audio

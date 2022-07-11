@@ -103,7 +103,7 @@ class Parallelizer(tfkl.Layer):
         self.n_synths = n_synths
 
     def build(self, input_shape):
-        self.batch_size = input_shape[0]
+        self.batch_size = input_shape['conditioning'][0]
 
     def put_polyphony_axis_at_first(self, x):
         """Reshape feature before calling parallelize"""
@@ -121,7 +121,7 @@ class Parallelizer(tfkl.Layer):
         # Merge the polyphony and batch axis (which are the first two axis)
         shape = tf.shape(x)
         new_shape = tf.concat(
-            [[self.n_synths * shape[1]], shape[2:]],
+            [[self.n_synths * self.batch_size], shape[2:]],
             axis=0
         )
         return tf.reshape(x, new_shape)
@@ -130,7 +130,7 @@ class Parallelizer(tfkl.Layer):
         # Disentangle batch and polyphony axis
         shape = tf.shape(x)
         new_shape = tf.concat(
-            [[self.n_synths, shape[0] // self.n_synths], shape[1:]],
+            [[self.n_synths, self.batch_size], shape[1:]],
             axis=0
         )
         return tf.reshape(x, new_shape)
@@ -163,6 +163,12 @@ class Parallelizer(tfkl.Layer):
             for i in range(self.n_synths):
                 features[k + f'_{i}'] = features[k][i]
         return features
+
+    def call(self, features, parallelize=True):
+        if parallelize:
+            return self.parallelize(features)
+        else:
+            return self.unparallelize(features)
 
 
 class InharmonicityNetwork(nn.DictLayer):
@@ -418,7 +424,8 @@ class NoteRelease(nn.DictLayer):
 
 
 class OneHotZEncoder(nn.DictLayer):
-    """ Transforms one-hot instrument model into a Z embedding.
+    """ Transforms one-hot encoded instrument model into a Z embedding and
+    model-specific detuning and inharmonicity coefficient.
     Args:
         - n_instruments (int): number of instrument to be supported.
         - z_dim (int): dimension of z embedding.
@@ -431,17 +438,30 @@ class OneHotZEncoder(nn.DictLayer):
         self.z_dim = z_dim
         self.n_frames = n_frames
 
-    def build(self, input_shape):
-        super(OneHotZEncoder, self).build(input_shape)
         self.embedding = tfkl.Embedding(input_dim=self.n_instruments,
                                         output_dim=self.z_dim,
-                                        input_length=1)
+                                        input_length=1,
+                                        name='instrument_embedding')
         self.inharm_embedding = tfkl.Embedding(input_dim=self.n_instruments,
                                                output_dim=1,
-                                               input_length=1)
+                                               input_length=1,
+                                               name='instr_specific_inharm')
         self.detune_embedding = tfkl.Embedding(input_dim=self.n_instruments,
                                                output_dim=1,
-                                               input_length=1)
+                                               input_length=1,
+                                               name='instr_specific_detuning')
+
+    def alternate_training(self, first_phase=True):
+        """Toggle trainability of models according to the training phase.
+        (Modules involved with partial frequency computing are frozen during
+        the first training phase).
+        Args:
+            - first_phase (bool): whether training with the 1st phase strategy
+            or not.
+        """
+        self.embedding.trainable = first_phase
+        self.inharm_embedding.trainable = not first_phase
+        self.detune_embedding.trainable = not first_phase
 
     def call(self, piano_model) -> ['z', 'global_inharm', 'global_detuning']:
         # Compute Z embedding from instrument id
