@@ -1,5 +1,5 @@
 import tensorflow as tf
-import ddsp_piano.io_utils as io_utils
+import ddsp_piano.utils.io_utils as io_utils
 
 from os.path import join
 

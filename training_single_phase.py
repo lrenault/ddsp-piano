@@ -142,6 +142,8 @@ def main(args):
                 # Save model epoch before validation
                 shutil.rmtree(join(exp_dir, "last_iter"))
                 trainer.save(join(exp_dir, "last_iter"))
+                print(f'Last iteration model saved at \
+                      {join(exp_dir, "last_iter")}')
 
                 # Skip validation during early training
                 if trainer.step < 60000:
@@ -171,7 +173,8 @@ def main(args):
 
                 # Write loss values in tensorboard
                 print("Validation loss:", val_loss / (val_step + 1))
-                scalar('val_loss', val_loss / (val_step + 1),
+                scalar('val_loss',
+                       val_loss / (val_step + 1),
                        step=step)
                 scalar('val_loss/spectral',
                        val_spectral / (val_step + 1),

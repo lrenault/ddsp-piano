@@ -1,8 +1,9 @@
 import ddsp
 import tensorflow as tf
+
 from ddsp.training.nn import Normalize
-from ddsp_piano.data_processing.data_pipeline import get_first_batch, get_dummy_data
-from ddsp_piano.models.piano_model import PianoModel
+from ddsp_piano.data_pipeline import get_dummy_data
+from ddsp_piano.modules.piano_model import PianoModel
 from ddsp_piano.modules import sub_modules, losses
 from ddsp_piano.modules.inharm_synth import MultiInharmonic
 

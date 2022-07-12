@@ -1,2 +1,2 @@
-from ddsp_piano import data_processing
-from ddsp_piano import modules
+from ddsp_piano import default_model
+from ddsp_piano import data_pipeline

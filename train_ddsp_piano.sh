@@ -23,14 +23,14 @@ phase_3_batch_size=6
 phase_3_n_epochs=4  # TBA
 phase_3_learning_rate=0.001
 
-# python training_single_phase.py \
-# 	--steps_per_epoch $steps_per_epoch \
-# 	--batch_size $phase_1_batch_size \
-# 	--epochs $phase_1_n_epochs \
-# 	--lr $phase_1_learning_rate \
-# 	--phase 1 \
-# 	$maestro_path \
-# 	$exp_dir
+python training_single_phase.py \
+	--steps_per_epoch $steps_per_epoch \
+	--batch_size $phase_1_batch_size \
+	--epochs $phase_1_n_epochs \
+	--lr $phase_1_learning_rate \
+	--phase 1 \
+	$maestro_path \
+	$exp_dir
 
 python training_single_phase.py \
 	--steps_per_epoch $steps_per_epoch \

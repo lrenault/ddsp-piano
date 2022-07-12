@@ -4,24 +4,10 @@ import numpy as np
 import tensorflow as tf
 
 from pandas import read_csv
-from argparse import ArgumentTypeError
 from ddsp.training.data_preparation import prepare_tfrecord_lib as ddsp_lib
-
-from ddsp_piano.data_processing.midi_encoders import MIDIRoll2Conditioning
+from ddsp_piano.utils.midi_encoders import MIDIRoll2Conditioning
 
 seq_lib = note_seq.sequences_lib
-
-
-def str2bool(v):
-    """Convert text to boolean for argparse"""
-    if isinstance(v, bool):
-        return v
-    if v.lower() in ('yes', 'true', 't', 'y', '1'):
-        return True
-    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
-        return False
-    else:
-        raise ArgumentTypeError('Boolean value expected.')
 
 
 def dataset_from_csv(csv_path, split=None, **kwargs):
