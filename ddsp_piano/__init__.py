@@ -1,2 +1,2 @@
-from ddsp_piano import default_model
-from ddsp_piano import data_pipeline
+from . import default_model
+from . import data_pipeline

@@ -15,7 +15,7 @@ def get_first_batch(*args, **kwargs):
 
 
 def get_dummy_data(batch_size=6,
-                   duration=3.0,
+                   duration=3,
                    sample_rate=16000,
                    frame_rate=250,
                    max_polyphony=16):

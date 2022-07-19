@@ -3,8 +3,7 @@ import tensorflow as tf
 
 from ddsp.training.nn import Normalize
 from ddsp_piano.data_pipeline import get_dummy_data
-from ddsp_piano.modules.piano_model import PianoModel
-from ddsp_piano.modules import sub_modules, losses
+from ddsp_piano.modules import PianoModel, sub_modules, losses
 from ddsp_piano.modules.inharm_synth import MultiInharmonic
 
 tfkl = tf.keras.layers
@@ -147,11 +146,12 @@ def get_model(inference=False,
     return model
 
 
-def build_model(model, batch_size=6, first_phase=False):
+def build_model(model, batch_size=6, first_phase=False, duration=3.):
     # Toggle submodules trainability
     model.alternate_training(first_phase=first_phase)
     # Model building by forwarding a batch sample
-    batch = get_dummy_data(batch_size=batch_size)
+    batch = get_dummy_data(batch_size=batch_size,
+                           duration=duration)
     _ = model(batch, training=True)
 
     model.summary()

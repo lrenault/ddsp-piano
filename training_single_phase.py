@@ -8,10 +8,10 @@ from os.path import join
 from ddsp.training import trainers, train_util, summaries
 from tensorflow.summary import create_file_writer, scalar
 
-from ddsp_piano.models.default_model import get_model, build_model
-from ddsp_piano.data_processing.data_pipeline \
+from ddsp_piano.default_model import get_model, build_model
+from ddsp_piano.data_pipeline \
     import get_training_dataset, get_validation_dataset
-from ddsp_piano.io_utils import collect_garbage
+from ddsp_piano.utils.io_utils import collect_garbage
 
 
 def process_args():

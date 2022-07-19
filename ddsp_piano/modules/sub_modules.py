@@ -378,7 +378,7 @@ class F0ProcessorCell(tfkl.Layer):
         self.state_size = 2
 
     def build(self, input_shape):
-        self.decay = tf.Variable(1., name="F0decay")
+        self.release_duration = tf.Variable(1., name="F0decay")
 
         self.trainable = False
         self.built = True
@@ -394,7 +394,7 @@ class F0ProcessorCell(tfkl.Layer):
         decayed_steps = previous_state[0][..., 1:2]
 
         note_activity = tf.greater(midi_note, 0)
-        decay_end = tf.greater(decayed_steps, self.decay * self.frame_rate)
+        decay_end = tf.greater(decayed_steps, self.release_duration * self.frame_rate)
 
         note_activity = tf_float32(note_activity)
         decay_end = 1 - tf_float32(decay_end)

@@ -11,7 +11,7 @@ seq_lib = note_seq.sequences_lib
 
 
 def dataset_from_csv(csv_path, split=None, **kwargs):
-    """ Load dataset from a csv file.
+    """Load dataset from a csv file.
     Returns:
         - dataset (tf.data.Dataset): tensorflow dataset from .csv
         - n_samples (int): number of dataset entries.
@@ -42,6 +42,52 @@ def load_midi_as_note_sequence(mid_path):
     # Extend offset with sustain pedal
     note_sequence = note_seq.apply_sustain_control_changes(note_sequence)
     return note_sequence
+
+
+def load_midi_as_conditioning(mid_path, n_synths=16, frame_rate=250):
+    """Load MIDI file as conditioning and pedal inputs for inference.
+    Args:
+        - mid_path (path): path to .mid file.
+        - n_synths (int): number of polyphonoic channels in the conditioning.
+        - frame_rate (int): number of frames per second.
+    Returns:
+        - conditioning (1, n_frames, n_synths, 2): polyphonic note activity and
+        onset inputs.
+        - pedal (1, n_frames, 4): pedal information.
+        - duration (float): length of the sequence (in s).
+    """
+    # File reading
+    note_sequence = load_midi_as_note_sequence(mid_path)
+    # Convert to pianoroll
+    roll = seq_lib.sequence_to_pianoroll(note_sequence,
+                                         frames_per_second=frame_rate,
+                                         min_pitch=21,
+                                         max_pitch=108)
+    # Retrieve activity and onset velocities and pedals signals
+    midi_roll = np.stack((roll.active, roll.onset_velocities), axis=-1)
+    pedals = roll.control_changes[:, 64: 68] / 128.
+
+    # Reduce pianoroll to conditioning while managing polyphonic information
+    polyphony_manager = MIDIRoll2Conditioning(n_synths)
+    conditioning, _ = polyphony_manager(midi_roll)
+
+    # Compute padding length
+    duration = note_sequence.total_time
+    n_frames = np.shape(conditioning)[0]
+    n_frames_ceiled = np.ceil(duration) * frame_rate
+
+    # Pad inputs to an integer number of second
+    conditioning = np.pad(conditioning,
+                          pad_width=((0, int(n_frames_ceiled - n_frames)),
+                                     (0, 0),
+                                     (0, 0)))
+    pedals = np.pad(pedals,
+                    pad_width=((0, int(n_frames_ceiled - n_frames)),
+                               (0, 0)))
+    # Return with a batch size of 1
+    return {'conditioning': conditioning[np.newaxis, ...],
+            'pedal': pedals[np.newaxis, ...],
+            'duration': np.ceil(duration)}
 
 
 def load_and_split_data(audio_path,
