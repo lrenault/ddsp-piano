@@ -1,3 +1,4 @@
+import os
 import argparse
 import tensorflow as tf
 from soundfile import write
@@ -5,11 +6,18 @@ from ddsp.training import trainers, train_util
 from ddsp_piano.default_model import get_model, build_model
 from ddsp_piano.utils.io_utils import load_midi_as_conditioning
 
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+
 
 def process_args():
     parser = argparse.ArgumentParser()
+    parser.add_argument('--ckpt', type=str, help="Model checkpoint to load.",
+                        default='ddsp_piano/model_weights/ckpt-0')
     parser.add_argument('--piano_type', type=int, default=3,
                         help="Piano model (from 0 to 9).\
+                              (default: %(default)s)")
+    parser.add_argument('--duration', type=float, default=None,
+                        help="Maximum duration of synthesized audio.\
                               (default: %(default)s)")
     parser.add_argument('midi_file', type=str,
                         help="Piano MIDI file to synthesize.")
@@ -21,8 +29,7 @@ def process_args():
 def main(args):
     # Load MIDI data
     print("Loading midi file...")
-    inputs = load_midi_as_conditioning(args.midi_file)
-
+    inputs = load_midi_as_conditioning(args.midi_file, duration=args.duration)
     # Add piano model conditioning
     inputs['piano_model'] = tf.convert_to_tensor([[args.piano_type]])
 
@@ -38,9 +45,7 @@ def main(args):
         # Restore model weight
         print("Model built, now retrieving model weights...")
         trainer = trainers.Trainer(model, strategy=strategy)
-        trainer.restore(
-            '/data3/anasynth_nonbp/renault/audio_database/maestro-v3.0.0/models/admis/recoded/ckpt-0'
-        )
+        trainer.restore(args.ckpt)
 
     # Forward pass
     print("Model retrieved with default weights. \

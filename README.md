@@ -16,7 +16,7 @@ A piano MIDI file can be synthesized by the model with the command:
 ```
 python synthesize_midi_file.py <input_midi_file.mid> <output_file.wav>
 ```
-Additional arguments for the inference scipt include:
+Additional arguments for the inference script include:
 - `--piano_model`: the desired model among the 10 piano years learned from the MAESTRO dataset.
 - `--ckpt`: a path to a different checkpoint from the provided weights.
 
@@ -27,7 +27,7 @@ After following the instructions for downloading the dataset, a default piano mo
 ```
 train_ddsp_piano.sh <path-to-maestro-v3.0.0/> <experiment-directory>
 ```
-This training configuration reproduces the full training of the paper model, but training for a single phase can be done with the python script `train_single_phase.py`.
+This training configuration reproduces the full training of the model presented in the paper, but training for a single phase can be done with the python script `train_single_phase.py`.
 
 
 ## Bibtex

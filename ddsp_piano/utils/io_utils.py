@@ -44,12 +44,33 @@ def load_midi_as_note_sequence(mid_path):
     return note_sequence
 
 
-def load_midi_as_conditioning(mid_path, n_synths=16, frame_rate=250):
+def ensure_sequence_length(sequence, length):
+    """Zero-pad or crop sequence to fit desired length."""
+    original_length = sequence.shape[0]
+    # Return as is
+    if original_length == length:
+        return sequence
+    # Crop
+    elif original_length > length:
+        return sequence[:length]
+    # Pad
+    else:
+        pad_width = ((0, int(length - original_length)))
+        for _ in range(len(sequence.shape) - 1):
+            pad_width += (0, 0)
+        return np.pad(sequence, pad_width=pad_width)
+
+
+def load_midi_as_conditioning(mid_path,
+                              n_synths=16,
+                              frame_rate=250,
+                              duration=None):
     """Load MIDI file as conditioning and pedal inputs for inference.
     Args:
         - mid_path (path): path to .mid file.
         - n_synths (int): number of polyphonoic channels in the conditioning.
         - frame_rate (int): number of frames per second.
+        - duration (float): crop file reading to this duration.
     Returns:
         - conditioning (1, n_frames, n_synths, 2): polyphonic note activity and
         onset inputs.
@@ -71,23 +92,20 @@ def load_midi_as_conditioning(mid_path, n_synths=16, frame_rate=250):
     polyphony_manager = MIDIRoll2Conditioning(n_synths)
     conditioning, _ = polyphony_manager(midi_roll)
 
-    # Compute padding length
-    duration = note_sequence.total_time
-    n_frames = np.shape(conditioning)[0]
-    n_frames_ceiled = np.ceil(duration) * frame_rate
+    # Set target length to an integer number of seconds
+    if duration is None:
+        target_n_frames = np.ceil(note_sequence.total_time) * frame_rate
+    else:
+        target_n_frames = int(duration * frame_rate)
 
-    # Pad inputs to an integer number of second
-    conditioning = np.pad(conditioning,
-                          pad_width=((0, int(n_frames_ceiled - n_frames)),
-                                     (0, 0),
-                                     (0, 0)))
-    pedals = np.pad(pedals,
-                    pad_width=((0, int(n_frames_ceiled - n_frames)),
-                               (0, 0)))
+    # Crop/pad inputs
+    conditioning = ensure_sequence_length(conditioning, target_n_frames)
+    pedals = ensure_sequence_length(pedals, target_n_frames)
+
     # Return with a batch size of 1
     return {'conditioning': conditioning[np.newaxis, ...],
             'pedal': pedals[np.newaxis, ...],
-            'duration': np.ceil(duration)}
+            'duration': target_n_frames / frame_rate}
 
 
 def load_and_split_data(audio_path,
