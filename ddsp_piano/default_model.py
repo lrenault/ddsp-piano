@@ -146,14 +146,24 @@ def get_model(inference=False,
     return model
 
 
-def build_model(model, batch_size=6, first_phase=False, duration=3.):
+def build_model(model, batch_size=6, first_phase=False, **kwargs):
+    """Finish model building by forwarding a batch sample.
+    Args:
+        - model (PianoModel): declared model to build.
+        - batch_size (int): number of samples to handle simulatenously.
+        - first_phase (bool): apply first phase training strategy.
+    Returns:
+        - model (PianoModel): built model.
+    """
+
     # Toggle submodules trainability
     model.alternate_training(first_phase=first_phase)
+
     # Model building by forwarding a batch sample
-    batch = get_dummy_data(batch_size=batch_size,
-                           duration=duration)
+    batch = get_dummy_data(batch_size=batch_size, **kwargs)
     _ = model(batch, training=True)
 
+    # Print model summary
     model.summary()
 
     return model

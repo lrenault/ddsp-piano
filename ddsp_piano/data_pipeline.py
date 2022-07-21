@@ -18,12 +18,13 @@ def get_dummy_data(batch_size=6,
                    duration=3,
                    sample_rate=16000,
                    frame_rate=250,
-                   max_polyphony=16):
+                   n_synths=16):
+    """Create random input data. Same arguments as for get_dataset()."""
     # Shapes definition
     n_frames = int(duration * frame_rate)
     n_samples = int(duration * sample_rate)
 
-    conditioning_shape = [batch_size, n_frames, max_polyphony, 2]
+    conditioning_shape = [batch_size, n_frames, n_synths, 2]
     pedal_shape = [batch_size, n_frames, 4]
     piano_model_shape = [batch_size, 1, ]
     audio_shape = [batch_size, n_samples, ]
@@ -93,9 +94,21 @@ def get_dataset(dataset_dir,
     segments.
     Args:
         - dataset_dir (path): path to the maestro-v3.0.0/ folder.
-        - only_first_seg (bool): whether to only get the first segment for each
-        track.
+        - split (str): which dataset subset to use (among 'train', 'validation'
+        and 'test').
+        - only_first_seg (bool): retrieve only the first segment for each track
         - duration (float): duration of audio segments (in s).
+        - batch_size (int): number of segments per batch.
+        - shuffle (bool): apply shuffling between tracks.
+        - infinite_generator (bool): provide data indefinitely.
+        - sample_rate (int): number of audio samples per second.
+        - frame_rate (int): number of conditioning input frames per second.
+        - max_polyphony (int): filter out segments with more simultaneous notes
+        than the model polyphonic capacity. Does not filter anything if set to
+        `None`.
+        - num_parallel_calls (int): number of threads.
+    Returns:
+        - dataset (tf.data.Dataset): segments dataset
     """
     # Init tf.dataset from .csv file
     dataset, n_examples, piano_models = io_utils.dataset_from_csv(

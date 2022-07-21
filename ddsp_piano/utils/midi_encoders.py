@@ -4,10 +4,12 @@ import numpy as np
 class MIDIRoll2Conditioning(object):
     """Convert pianorolls into polyphonic conditioning vector in NumPy.
     Params:
-        - n_synths (int): number of simultaneous notes supported
-        - pitch_mul (88): multiplication matrix for converting active pianoroll
+        - n_synths (int): supported number of simultaneous notes.
+        - pitch_mul (88): multiplication matrix for retrieving pitch from
+        the active pianoroll.
         - assigner (int): next available slot in the conditioning filler.
-        - reorder (n_synths,): reordering for reduced pianoroll to conditioning
+        - reorder (n_synths,): reordering for reduced pianoroll frame to
+        conditioning frame.
     """
 
     def __init__(self, n_synths=16):

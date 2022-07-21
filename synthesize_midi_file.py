@@ -9,7 +9,8 @@ from ddsp_piano.utils.io_utils import load_midi_as_conditioning
 def process_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--piano_type', type=int, default=3,
-                        help="Piano model. (default: %(default)s)")
+                        help="Piano model (from 0 to 9).\
+                              (default: %(default)s)")
     parser.add_argument('midi_file', type=str,
                         help="Piano MIDI file to synthesize.")
     parser.add_argument('out_file', type=str,
@@ -21,6 +22,8 @@ def main(args):
     # Load MIDI data
     print("Loading midi file...")
     inputs = load_midi_as_conditioning(args.midi_file)
+
+    # Add piano model conditioning
     inputs['piano_model'] = tf.convert_to_tensor([[args.piano_type]])
 
     # Model contruction
@@ -28,11 +31,10 @@ def main(args):
             \nNow building the piano synthesizer...")
     strategy = train_util.get_strategy()
     with strategy.scope():
-        model = build_model(get_model(inference=True,
-                                      duration=inputs['duration']),
+        model = get_model(inference=True, duration=inputs['duration'])
+        model = build_model(model,
                             batch_size=1,
-                            duration=inputs['duration'],
-                            )
+                            duration=inputs['duration'])
         # Restore model weight
         print("Model built, now retrieving model weights...")
         trainer = trainers.Trainer(model, strategy=strategy)
@@ -44,6 +46,8 @@ def main(args):
     print("Model retrieved with default weights. \
            \nNow synthesizing audio (this could take some time)...")
     outputs = model(inputs)
+
+    # Save audio
     write(args.out_file,
           data=outputs['audio_synth'][0].numpy(),
           samplerate=16000)

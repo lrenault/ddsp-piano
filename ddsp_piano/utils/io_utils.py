@@ -31,7 +31,7 @@ def dataset_from_csv(csv_path, split=None, **kwargs):
     )
     # Get dataset length and piano models
     n_samples = len(df)
-    piano_models = df['year'].unique()
+    piano_models = np.sort(df['year'].unique())
 
     return dataset, n_samples, piano_models
 
@@ -180,6 +180,7 @@ def load_convert_split_data_tf(audio_path,
                                mid_path,
                                segment_duration,
                                max_polyphony):
+    """tf.function wrapper for the load_and_split_data function."""
     audio, conditioning, pedals, polyphony, n_segments = tf.py_function(
         load_and_split_data,
         [audio_path, mid_path, segment_duration, max_polyphony],
