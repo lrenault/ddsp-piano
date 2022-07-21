@@ -16,7 +16,7 @@ def process_args():
     parser.add_argument('--piano_type', type=int, default=3,
                         help="Piano model (from 0 to 9).\
                               (default: %(default)s)")
-    parser.add_argument('--duration', type=float, default=None,
+    parser.add_argument('--duration', '-d', type=float, default=None,
                         help="Maximum duration of synthesized audio.\
                               (default: %(default)s)")
     parser.add_argument('midi_file', type=str,

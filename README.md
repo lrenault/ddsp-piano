@@ -17,6 +17,7 @@ A piano MIDI file can be synthesized by the model with the command:
 python synthesize_midi_file.py <input_midi_file.mid> <output_file.wav>
 ```
 Additional arguments for the inference script include:
+- `--duration`: the maximum duration of the synhthesized file. If set to `None`, it will synthesize the whole file.
 - `--piano_model`: the desired model among the 10 piano years learned from the MAESTRO dataset.
 - `--ckpt`: a path to a different checkpoint from the provided weights.
 

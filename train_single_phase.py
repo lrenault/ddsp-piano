@@ -18,7 +18,7 @@ def process_args():
     # Get arguments from command line
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('--batch_size', type=int, default=6,
+    parser.add_argument('--batch_size', '-b', type=int, default=6,
                         help="Number of elements per batch.\
                         (default: %(default)s)")
 
@@ -26,13 +26,13 @@ def process_args():
                         help="Number of steps of gradient descent per epoch.\
                         (default: %(default)s)")
 
-    parser.add_argument('--epochs', type=int, default=128,
+    parser.add_argument('--epochs', '-e', type=int, default=128,
                         help="Number of epochs. (default: %(default)s)")
 
     parser.add_argument('--lr', type=float, default=0.001,
                         help="Learning rate. (default: %(default)s)")
 
-    parser.add_argument('--phase', type=int, default=1,
+    parser.add_argument('--phase', '-p', type=int, default=1,
                         help="Training phase strategy to apply. \
                         Set to even for fine-tuning only the detuner and \
                         inharmonicity sub-modules.\
