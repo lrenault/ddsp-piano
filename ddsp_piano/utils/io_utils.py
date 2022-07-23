@@ -55,9 +55,9 @@ def ensure_sequence_length(sequence, length):
         return sequence[:length]
     # Pad
     else:
-        pad_width = ((0, int(length - original_length)))
+        pad_width = [(0, int(length - original_length))]
         for _ in range(len(sequence.shape) - 1):
-            pad_width += (0, 0)
+            pad_width += [(0, 0)]
         return np.pad(sequence, pad_width=pad_width)
 
 
