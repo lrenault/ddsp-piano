@@ -23,7 +23,7 @@ class ContextNetwork(nn.OutputSplitsLayer):
 
     @property
     def layers(self):
-        return self.model.layers
+        return self.model.layers + [self.dense_out]
 
     def collapse_last_axis(self, x, axis=-2):
         # Merge last axis of the tensor 'x', starting from axis 'axis'
@@ -70,7 +70,7 @@ class MonophonicNetwork(nn.OutputSplitsLayer):
 
     @property
     def layers(self):
-        return self.model.layers
+        return self.model.layers + [self.dense_out]
 
     def compute_output(self, conditioning, extended_pitch, context):
         """Forward parallelized monophonic inputs through the model.

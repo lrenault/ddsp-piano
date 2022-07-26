@@ -63,7 +63,7 @@ def main(args):
         - exp_dir (path): folder to store experiment results and logs.
     """
     # Format training phase strategy
-    first_phase_strat = ((args.phase % 2) == 0)
+    first_phase_strat = ((args.phase % 2) == 1)
 
     # Build/Load and put the model in the available strategy scope
     strategy = train_util.get_strategy()
@@ -132,18 +132,18 @@ def main(args):
                 scalar('train_loss/spectral',
                        spectral_loss / args.steps_per_epoch,
                        step=step)
-                scalar('train_loss/reverb',
+                scalar('train_loss/reverb_regularization',
                        reverb_loss / args.steps_per_epoch,
                        step=step)
-                scalar('train_loss/regularization',
+                scalar('train_loss/model_regularization',
                        regularization_loss / args.steps_per_epoch,
                        step=step)
 
                 # Save model epoch before validation
                 shutil.rmtree(join(exp_dir, "last_iter"))
                 trainer.save(join(exp_dir, "last_iter"))
-                print(f'Last iteration model saved at \
-                      {join(exp_dir, "last_iter")}')
+                print('Last iteration model saved at ',
+                      {join(exp_dir, "last_iter")})
 
                 # Skip validation during early training
                 if trainer.step < 60000:
@@ -179,10 +179,10 @@ def main(args):
                 scalar('val_loss/spectral',
                        val_spectral / (val_step + 1),
                        step=step)
-                scalar('val_loss/reverb',
+                scalar('val_loss/reverb_regularization',
                        val_reverb / (val_step + 1),
                        step=step)
-                scalar('val_loss/regularization',
+                scalar('val_loss/model_regularization',
                        val_regularization / (val_step + 1),
                        step=step)
                 summaries.audio_summary(val_outs_summary['audio_synth'],

@@ -163,7 +163,7 @@ class MultiInharmonic(InHarmonic):
         # Put back multi-f0 signal
         controls['f0_hz'] = f0_hz
         # Divide global amplitude by the number of substrings
-        controls['amplitudes'] /= core.tf_float32(tf.shape(f0_hz)[-1])
+        controls['amplitudes'] /= core.tf_float32(f0_hz.shape[-1])
         return controls
 
     def get_signal(self,
@@ -171,7 +171,7 @@ class MultiInharmonic(InHarmonic):
                    harmonic_distribution,
                    harmonic_shifts,
                    f0_hz):
-        n_substrings = tf.shape(f0_hz)[-1]
+        n_substrings = f0_hz.shape[-1]
         # Audio from the first substring
         audio = super(MultiInharmonic, self).get_signal(
             amplitudes,

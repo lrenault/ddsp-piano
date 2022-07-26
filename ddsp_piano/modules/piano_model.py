@@ -5,7 +5,24 @@ from ddsp.training.models.model import Model
 
 
 class PianoModel(Model):
-    """DDSP model for piano synthesis from MIDI conditioning"""
+    """DDSP model for piano synthesis from MIDI conditioning.
+    Args:
+        - z_encoder (nn.DictLayer): one-hot piano model embeddings.
+        - note_release (nn.DictLayer): extend active pitch conditioning.
+        - context_network (nn.DictLayer): context vector computation model from
+        global inputs.
+        - parallelizer (nn.DictLayer): layer managing polyphony and batch axis
+        merge and unmerge.
+        - monophonic_network (nn.DictLayer): monophonic string model as
+        neural network.
+        - inharm_model (nn.DictLayer): inharmonicity model over tessitura.
+        - detuner (nn.DictLayer): tuning model for pitch to absolute f0
+        frequency.
+        - reverb_model (nn.DictLayer): recording environment impulse responses.
+        - processor_group (ddsp.processors.ProcessorGroup): group of
+        differentiable processors generating audio from controls.
+        - losses (ddsp.losses.Loss): list of loss functions.
+    """
 
     def __init__(self,
                  z_encoder=None,

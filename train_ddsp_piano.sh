@@ -5,7 +5,7 @@ maestro_path=$1
 exp_dir=$2
 
 # Constant training parameters over whole training
-steps_per_epoch=4  # 15904
+steps_per_epoch=15904
 
 # phase 1 training parameters
 phase_1_batch_size=6
