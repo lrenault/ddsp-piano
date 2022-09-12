@@ -2,7 +2,7 @@
 DDSP-Piano is a piano sound synthesizer from MIDI based on [DDSP](https://github.com/magenta/ddsp).
 
 ### Links
-- Paper, published in DAFx20in22 (link TBA) 📄
+- [Paper, published in DAFx20in22](https://dafx2020.mdw.ac.at/proceedings/papers/DAFx20in22_paper_48.pdf) 📄
 - [Some audio examples](http://recherche.ircam.fr/anasyn/renault/DAFx22) 🔈
 
 ## Installation
@@ -54,8 +54,8 @@ If you use this code, please cite it as:
 @inproceedings{
   renault2022diffpiano,
   title={Differentiable Piano Model for MIDI-to-Audio Performance Synthesis},
-  author={Lenny Renault and Rémi Mignot and Axel Roebel},
-  booktitle={International Conference on Digital Audio Effects}
+  author={Renault, Lenny and Mignot, Rémi and Roebel, Axel},
+  booktitle={Proceedings of the 25th International Conference on Digital Audio Effects},
   year={2022}
 }
 ```
