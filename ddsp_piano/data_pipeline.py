@@ -79,6 +79,7 @@ def get_test_dataset(*args, duration=30, **kwargs):
 
 def get_dataset(dataset_dir,
                 split='train',
+                year=None,
                 only_first_seg=False,
                 duration=3.0,
                 batch_size=6,
@@ -112,8 +113,9 @@ def get_dataset(dataset_dir,
     """
     # Init tf.dataset from .csv file
     dataset, n_examples, piano_models = io_utils.dataset_from_csv(
-        join(dataset_dir, "maestro-v3.0.0.csv"),
-        split=split
+        csv_path=join(dataset_dir, "maestro-v3.0.0.csv"),
+        split=split,
+        year=year
     )
     # Shapes definition
     n_frames = int(duration * frame_rate)

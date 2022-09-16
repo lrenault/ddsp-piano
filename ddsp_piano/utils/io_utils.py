@@ -10,7 +10,7 @@ from ddsp_piano.utils.midi_encoders import MIDIRoll2Conditioning
 seq_lib = note_seq.sequences_lib
 
 
-def dataset_from_csv(csv_path, split=None, **kwargs):
+def dataset_from_csv(csv_path, split=None, year=None, **kwargs):
     """Load dataset from a csv file.
     Returns:
         - dataset (tf.data.Dataset): tensorflow dataset from .csv
@@ -23,6 +23,8 @@ def dataset_from_csv(csv_path, split=None, **kwargs):
     # Filter by split
     if split:
         df = df[df.split == split]
+    if year:
+        df = df[df.year == year]
 
     # Convert dataframe to tf.data.Dataset
     dataset = (
