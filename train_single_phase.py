@@ -8,7 +8,8 @@ from os.path import join
 from ddsp.training import trainers, train_util, summaries
 from tensorflow.summary import create_file_writer, scalar
 
-from ddsp_piano.default_model import get_model, build_model
+from ddsp_piano.default_model import build_model  # , get_model
+from ddsp_piano.jaes_model import get_model
 from ddsp_piano.data_pipeline \
     import get_training_dataset, get_validation_dataset
 from ddsp_piano.utils.io_utils import collect_garbage
@@ -22,7 +23,7 @@ def process_args():
                         help="Number of elements per batch.\
                         (default: %(default)s)")
 
-    parser.add_argument('--steps_per_epoch', type=int, default=16,
+    parser.add_argument('--steps_per_epoch', '-s', type=int, default=16,
                         help="Number of steps of gradient descent per epoch.\
                         (default: %(default)s)")
 
@@ -40,6 +41,10 @@ def process_args():
 
     parser.add_argument('--restore', type=str, default=None,
                         help="Restore training step from a saved folder.\
+                        (default: %(default)s)")
+
+    parser.add_argument('--val_path', type=str, default=None,
+                        help="Path to the validation data (if different from maestro_path).\
                         (default: %(default)s)")
 
     parser.add_argument('maestro_path', type=str,
@@ -62,6 +67,7 @@ def main(args):
         - maestro_path (path): maestro dataset location.
         - exp_dir (path): folder to store experiment results and logs.
     """
+    from admis.io_utils import lock_gpu; lock_gpu()
     # Format training phase strategy
     first_phase_strat = ((args.phase % 2) == 1)
 
@@ -80,10 +86,12 @@ def main(args):
             print(f"Restored model from {args.restore}")
 
     # Dataset loading
+    val_path = args.maestro_path if args.val_path is None else args.val_path
+
     training_dataset = get_training_dataset(args.maestro_path,
                                             batch_size=args.batch_size,
                                             max_polyphony=model.n_synths)
-    val_dataset = get_validation_dataset(args.maestro_path,
+    val_dataset = get_validation_dataset(val_path,
                                          batch_size=args.batch_size,
                                          max_polyphony=model.n_synths)
     # Dataset distribution
@@ -115,6 +123,7 @@ def main(args):
                 regularization_loss = 0.
                 reverb_loss = 0.
                 spectral_loss = 0.
+                reverb_gain =0.
                 for _ in tqdm(range(args.steps_per_epoch)):
                     # Train step
                     losses = trainer.train_step(train_iterator)
@@ -123,8 +132,10 @@ def main(args):
                     regularization_loss += float(losses['regularization_loss'])
                     reverb_loss += float(losses['reverb_regularizer'])
                     spectral_loss += float(losses['audio_stft_loss'])
+                    reverb_gain += float(losses['reverb_loudness'])
 
                 # Write loss values in tensorboard
+                # TODO: automatic loss extraction from model building
                 print("Training loss:", train_loss / args.steps_per_epoch)
                 scalar('train_loss',
                        train_loss / args.steps_per_epoch,
@@ -137,6 +148,9 @@ def main(args):
                        step=step)
                 scalar('train_loss/model_regularization',
                        regularization_loss / args.steps_per_epoch,
+                       step=step)
+                scalar('train_loss/reverb_loudness',
+                       reverb_gain / args.steps_per_epoch,
                        step=step)
 
                 # Save model epoch before validation
@@ -157,6 +171,7 @@ def main(args):
                 val_spectral = 0.
                 val_reverb = 0.
                 val_regularization = 0.
+                val_reverb_gain = 0.
                 for val_step, val_batch in enumerate(tqdm(val_dataset)):
                     # Validation step
                     outputs, val_losses = model(val_batch,
@@ -167,6 +182,7 @@ def main(args):
                     val_regularization += float(val_losses['regularization_loss'])
                     val_spectral += float(val_losses['audio_stft_loss'])
                     val_reverb += float(val_losses['reverb_regularizer'])
+                    val_reverb_gain += float(val_losses['reverb_loudness'])
 
                     if val_step == 0:
                         val_outs_summary = outputs
@@ -185,6 +201,9 @@ def main(args):
                 scalar('val_loss/model_regularization',
                        val_regularization / (val_step + 1),
                        step=step)
+                scalar('val_loss/reverb_gain',
+                        val_reverb_gain / (val_step + 1),
+                        step=step)
                 summaries.audio_summary(val_outs_summary['audio_synth'],
                                         step,
                                         sample_rate=16000,

@@ -46,3 +46,26 @@ class ReverbRegularizer(Loss):
         loss = tf.reduce_sum(self.magnitude_order(outputs['reverb_ir']))
         loss /= outputs['reverb_ir'].shape[0]  # Divide by batch size
         return self.weight * loss
+
+
+class LoudnessLoss(SpectralLoss):
+    """Loss comparing the loudness between two audio signals from two processor
+    outputs.
+    Args:
+        - target_key (str): target signal processor output key.
+        - synth_key (str): synthesize signal processor output key.
+    """
+    def __init__(self, target_key, synth_key, name='loudness_loss', **kwargs):
+        super(LoudnessLoss, self).__init__(mag_weight=0.0,
+                                           loudness_weight=1.0,
+                                           name=name,
+                                           **kwargs)
+        self.target_key = target_key
+        self.synth_key = synth_key
+    
+    def call(self, outputs, *args, **kwargs):
+        target_signal = outputs[self.target_key]['signal']
+        synth_signal = outputs[self.synth_key]['signal']
+
+        return super(SpectralLoss, self).call(target_signal,
+                                              synth_signal)

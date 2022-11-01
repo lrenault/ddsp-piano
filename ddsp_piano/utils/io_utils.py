@@ -10,6 +10,14 @@ from ddsp_piano.utils.midi_encoders import MIDIRoll2Conditioning
 seq_lib = note_seq.sequences_lib
 
 
+def decode_tfstring(tf_string):
+    return tf_string.numpy().decode('utf-8')
+
+
+def tf_to_np(x):
+    return x.numpy() if tf.is_tensor(x) else x
+
+
 def dataset_from_csv(csv_path, split=None, year=None, **kwargs):
     """Load dataset from a csv file.
     Returns:
@@ -110,22 +118,18 @@ def load_midi_as_conditioning(mid_path,
             'duration': target_n_frames / frame_rate}
 
 
-def load_and_split_data(audio_path,
-                        mid_path,
-                        segment_duration=3.,
-                        max_polyphony=None,
-                        overlap=0.5,
-                        sample_rate=16000,
-                        frame_rate=250):
+def load_data(audio_path,
+              mid_path,
+              max_polyphony=None,
+              sample_rate=16000,
+              frame_rate=250):
     """Load aligned audio and MIDI data (as conditioning sequence), then split
     into segments.
     Args:
         - audio_path (tf.path): absolute path to audio file.
         - mid_path (tf.path): absolute path to midi file.
-        - segment_duration (float): length of segment chunks (in s).
         - max_polyphony (int): number of monophonic channels for the conditio-
         ning vector (return the piano rolls if None).
-        - overlap (float): overlapping ratio between two consecutive segemnts.
         - sample_rate (int): number of audio samples per second.
         - frame_rate (int): number of conditioning vectors per second.
     Returns:
@@ -137,20 +141,13 @@ def load_and_split_data(audio_path,
         - polyphony (list [n_frames, 1]): list of polyphony information in the
         original piano roll.
     """
-    n_samples = int(segment_duration * sample_rate)
-    n_frames = int(segment_duration * frame_rate)
-    audio_hop_size = int(n_samples * (1 - overlap))
-    midi_hop_size = int(n_frames * (1 - overlap))
-
     # Read audio file
-    audio = ddsp_lib._load_audio_as_array(
-        audio_path.numpy().decode("utf-8"),
-        sample_rate
-    )
+    audio = ddsp_lib._load_audio_as_array(decode_tfstring(audio_path),
+                                          sample_rate)
+
     # Read MIDI file
-    note_sequence = load_midi_as_note_sequence(
-        mid_path.numpy().decode("utf-8")
-    )
+    note_sequence = load_midi_as_note_sequence(decode_tfstring(mid_path))
+
     # Convert to pianoroll
     roll = seq_lib.sequence_to_pianoroll(note_sequence,
                                          frames_per_second=frame_rate,
@@ -164,53 +161,51 @@ def load_and_split_data(audio_path,
 
     if max_polyphony is not None:
         polyphony_manager = MIDIRoll2Conditioning(max_polyphony)
-        midi_roll, polyphony = polyphony_manager(midi_roll)
+        conditioning, polyphony = polyphony_manager(midi_roll)
 
-    # Split into segments
-    audio_t = 0
-    midi_t = 0
-    segment_audio = []
-    segment_rolls = []
-    segment_pedals = []
-    segment_polyphony = []
-    while midi_t + n_frames < np.shape(midi_roll)[0]:
-        segment_audio.append(audio[audio_t: audio_t + n_samples])
-        segment_rolls.append(midi_roll[midi_t: midi_t + n_frames])
-        segment_pedals.append(pedals[midi_t: midi_t + n_frames])
+        return audio, conditioning, pedals, polyphony
 
-        if max_polyphony:
-            segment_polyphony.append(polyphony[midi_t: midi_t + n_frames])
-
-        audio_t += audio_hop_size
-        midi_t += midi_hop_size
-
-    n_segments = len(segment_rolls)
-
-    if max_polyphony is None:
-        return np.array(segment_audio), np.array(segment_rolls), \
-            np.array(segment_pedals), n_segments
     else:
-        return np.array(segment_audio), np.array(segment_rolls), \
-            np.array(segment_pedals), np.array(segment_polyphony), \
-            n_segments
+        return audio, midi_roll, pedals
 
 
 @tf.function
-def load_convert_split_data_tf(audio_path,
-                               mid_path,
-                               segment_duration,
-                               max_polyphony):
+def load_data_tf(audio_path, mid_path, max_polyphony):
     """tf.function wrapper for the load_and_split_data function."""
-    audio, conditioning, pedals, polyphony, n_segments = tf.py_function(
-        load_and_split_data,
-        [audio_path, mid_path, segment_duration, max_polyphony],
-        Tout=(tf.float32, tf.float32, tf.float32, tf.int32, tf.int32)
+    audio, conditioning, pedal, polyphony = tf.py_function(
+        load_data,
+        [audio_path, mid_path, max_polyphony],
+        Tout=(tf.float32, tf.float32, tf.float32, tf.int32)
     )
     return {"audio": audio,
             "conditioning": conditioning,
-            "pedal": pedals,
-            "polyphony": polyphony,
-            "n_segments": n_segments}
+            "pedal": pedal,
+            "polyphony": polyphony}
+
+
+def split_sequence(x, segment_duration, rate, overlap=0.5):
+    """Split sequence x into fixed size segments.
+    Args:
+        - x: a sequence to split.
+        - segment_duration (float): duration (in s) of the segments.
+        - rate (int): signal/frame rate of the sequence.
+        - overlap (float): overlap ratio between two consecutive segments.
+    Returns:
+        - segments (list): list of split segments.
+    """
+    n_samples = int(segment_duration * rate)
+    hop_size = int(n_samples * (1 - overlap))
+
+    timestep = 0
+    segments = []
+    while timestep + n_samples < np.shape(x)[0]:
+        segment = x[timestep: timestep + n_samples]
+        segment = ensure_sequence_length(segment, n_samples)
+
+        segments.append(segment)
+        timestep += hop_size
+
+    return np.stack(segments)
 
 
 def collect_garbage():

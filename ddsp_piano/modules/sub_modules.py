@@ -323,7 +323,7 @@ class ParametricTuning(nn.DictLayer):
         - inharm_coef (batch, n_frames, 1): inharmonicity coefficient.
     """
 
-    def __init__(self, name='parametric_tuniing', **kwargs):
+    def __init__(self, name='parametric_tuning', **kwargs):
         super(ParametricTuning, self).__init__(name=name, **kwargs)
 
         # Inharmonicity network
@@ -346,18 +346,21 @@ class ParametricTuning(nn.DictLayer):
 
     def get_deviation_from_ET(self, notes):
         # Get distance from reference note (A4)
-        reference_inharm_coef = self.inharm_model(self.reference_a)
+        reference_inharm_coef = self.dict_to_list(self.inharm_model(self.reference_a))
         ratio = midi_to_hz(notes) / midi_to_hz(self.reference_a)
 
         # Compute deviation from equal temperament of octave A
         detuning = 1 + reference_inharm_coef * (ratio * self.streching_model(notes))**2
-        detuning /= 1 + self.inharm_model(notes) * self.streching_model(notes)**2
+        detuning /= 1 + self.dict_to_list(self.inharm_model(notes)) * self.streching_model(notes)**2
         detuning = tf.math.sqrt(detuning)
 
         return detuning
 
+    def dict_to_list(self, inharm_coef):
+        return inharm_coef["inharm_coef"]
+
     def call(self, extended_pitch) -> ['f0_hz', 'inharm_coef']:
-        inharm_coef = self.inharm_model(extended_pitch)
+        inharm_coef = self.dict_to_list(self.inharm_model(extended_pitch))
         detuning = self.get_deviation_from_ET(extended_pitch)
 
         f0_hz = midi_to_hz(extended_pitch) * detuning
@@ -464,6 +467,10 @@ class OneHotZEncoder(nn.DictLayer):
         self.detune_embedding.trainable = not first_phase
 
     def call(self, piano_model) -> ['z', 'global_inharm', 'global_detuning']:
+        # Fix piano_model to 0 for single piano modeling
+        if self.n_instruments == 1:
+            piano_model = tf.zeros_like(piano_model, dtype=tf.int32)
+
         # Compute Z embedding from instrument id
         z = self.embedding(piano_model)
         global_inharm = self.inharm_embedding(piano_model)
@@ -528,6 +535,9 @@ class MultiInstrumentReverb(nn.DictLayer):
 
     def call(self, piano_model) -> ['reverb_ir']:
         """Get reverb IR from instrument id"""
+        if self.n_instruments == 1:
+            piano_model = tf.zeros_like(piano_model, dtype=tf.int32)
+
         ir = self.reverb_dict(piano_model)
 
         if len(ir.shape) == 3:

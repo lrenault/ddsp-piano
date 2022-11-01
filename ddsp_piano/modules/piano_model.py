@@ -82,7 +82,8 @@ class PianoModel(Model):
                 module.trainable = first_phase
 
         # Compute multiple note signals only when learning detuner weights
-        self.detuner.use_detune = not first_phase
+        if self.detuner is not None:
+            self.detuner.use_detune = not first_phase
 
     def compute_global_features(self, features, training):
         """Call all modules computing global features."""
