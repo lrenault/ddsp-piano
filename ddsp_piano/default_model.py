@@ -161,8 +161,7 @@ def build_model(model, batch_size=6, first_phase=False, **kwargs):
 
     # Model building by forwarding a batch sample
     batch = get_dummy_data(batch_size=batch_size, **kwargs)
-    _ = model(batch, training=True)
-
+    _ = model(batch, training=True, return_losses=True)
     # Print model summary
     model.summary()
 

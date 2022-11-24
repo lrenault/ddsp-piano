@@ -548,3 +548,30 @@ class MultiInstrumentReverb(nn.DictLayer):
             ir = self.exponential_decay_mask(ir)
 
         return ir
+
+
+class PartialMasking(nn.DictLayer):
+    """Set amplitudes of partials above n_partials to zero.
+    Args:
+        - n_partials (int): number of first partial amplitudes to keep.
+    """
+    def __init__(self, n_partials, **kwargs):
+        super(PartialMasking, self).__init__(**kwargs)
+        self.n_partials = n_partials
+
+    def call(self, harmonic_distribution) -> ['harmonic_distribution']:
+        n_synths, batch, n_frames, n_harmonics = tf.shape(harmonic_distribution)
+
+        # Build the partial index
+        partial_index = tf.range(n_harmonics)
+        partial_index = tf.reshape(mask, [1, 1, 1, n_harmonics])
+        partial_index = tf.tile(mask, (n_synths, batch, n_frames, 1))
+
+        # Set higher partial amplitudes to zero
+        harmonic_distribution = tf.where(
+            tf.less(partial_index, self.n_partials),
+            harmonic_distribution,
+            tf.zeros_like(harmonic_distribution)
+        )
+        return harmonic_distribution
+        

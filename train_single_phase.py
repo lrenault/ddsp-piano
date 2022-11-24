@@ -85,6 +85,8 @@ def main(args):
             trainer.restore(args.restore)
             print(f"Restored model from {args.restore}")
 
+    loss_keys = model._losses_dict.keys()
+
     # Dataset loading
     val_path = args.maestro_path if args.val_path is None else args.val_path
 
@@ -119,45 +121,27 @@ def main(args):
                 step = trainer.step  # step != epoch if resuming training
 
                 # Fit training data
-                train_loss = 0.
-                regularization_loss = 0.
-                reverb_loss = 0.
-                spectral_loss = 0.
-                reverb_gain =0.
+                epoch_losses = {k: 0. for k in loss_keys}
                 for _ in tqdm(range(args.steps_per_epoch)):
                     # Train step
                     losses = trainer.train_step(train_iterator)
                     # Retrieve loss values
-                    train_loss += float(losses['total_loss'])
-                    regularization_loss += float(losses['regularization_loss'])
-                    reverb_loss += float(losses['reverb_regularizer'])
-                    spectral_loss += float(losses['audio_stft_loss'])
-                    reverb_gain += float(losses['reverb_loudness'])
+                    for k in loss_keys:
+                        epoch_losses[k] += float(losses[k])
 
                 # Write loss values in tensorboard
-                # TODO: automatic loss extraction from model building
-                print("Training loss:", train_loss / args.steps_per_epoch)
-                scalar('train_loss',
-                       train_loss / args.steps_per_epoch,
-                       step=step)
-                scalar('train_loss/spectral',
-                       spectral_loss / args.steps_per_epoch,
-                       step=step)
-                scalar('train_loss/reverb_regularization',
-                       reverb_loss / args.steps_per_epoch,
-                       step=step)
-                scalar('train_loss/model_regularization',
-                       regularization_loss / args.steps_per_epoch,
-                       step=step)
-                scalar('train_loss/reverb_loudness',
-                       reverb_gain / args.steps_per_epoch,
-                       step=step)
+                print("Training loss:",
+                      epoch_losses['total_loss'] / args.steps_per_epoch)
+                for k, loss in epoch_losses.items():
+                    scalar('train_loss/' + k,
+                           loss / args.steps_per_epoch,
+                           step=step)
 
                 # Save model epoch before validation
                 shutil.rmtree(join(exp_dir, "last_iter"))
                 trainer.save(join(exp_dir, "last_iter"))
-                print('Last iteration model saved at ',
-                      {join(exp_dir, "last_iter")})
+                print('Last iteration model saved at',
+                      join(exp_dir, "last_iter"))
 
                 # Skip validation during early training
                 if trainer.step < 60000:
@@ -167,50 +151,33 @@ def main(args):
                 # Evaluate on validation data
                 print("Validation...")
                 val_outs_summary = None
-                val_loss = 0.
-                val_spectral = 0.
-                val_reverb = 0.
-                val_regularization = 0.
-                val_reverb_gain = 0.
+                epoch_val_losses = {k: 0. for k in loss_keys}
                 for val_step, val_batch in enumerate(tqdm(val_dataset)):
                     # Validation step
                     outputs, val_losses = model(val_batch,
                                                 return_losses=True,
                                                 training=True)
                     # Retrieve loss values
-                    val_loss += float(val_losses['total_loss'])
-                    val_regularization += float(val_losses['regularization_loss'])
-                    val_spectral += float(val_losses['audio_stft_loss'])
-                    val_reverb += float(val_losses['reverb_regularizer'])
-                    val_reverb_gain += float(val_losses['reverb_loudness'])
+                    for k in loss_keys:
+                        epoch_val_losses[k] += float(val_losses[k])
 
                     if val_step == 0:
                         val_outs_summary = outputs
 
                 # Write loss values in tensorboard
-                print("Validation loss:", val_loss / (val_step + 1))
-                scalar('val_loss',
-                       val_loss / (val_step + 1),
-                       step=step)
-                scalar('val_loss/spectral',
-                       val_spectral / (val_step + 1),
-                       step=step)
-                scalar('val_loss/reverb_regularization',
-                       val_reverb / (val_step + 1),
-                       step=step)
-                scalar('val_loss/model_regularization',
-                       val_regularization / (val_step + 1),
-                       step=step)
-                scalar('val_loss/reverb_gain',
-                        val_reverb_gain / (val_step + 1),
-                        step=step)
+                print("Validation loss:",
+                      epoch_val_losses['total_loss'] / (val_step + 1))
+                for k, loss in epoch_val_losses.items():
+                    scalar('val_loss/' + k,
+                           loss / (val_step + 1),
+                           step=step)
                 summaries.audio_summary(val_outs_summary['audio_synth'],
                                         step,
                                         sample_rate=16000,
                                         name='synthesized_audio')
                 # Save if better epoch
-                if val_spectral < lowest_val_loss:
-                    lowest_val_loss = val_spectral
+                if epoch_val_losses['audio_stft_loss'] < lowest_val_loss:
+                    lowest_val_loss = epoch_val_losses['audio_stft_loss']
                     trainer.save(join(exp_dir, "best_iter"))
 
                 # Collect garbage

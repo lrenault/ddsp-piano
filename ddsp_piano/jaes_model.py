@@ -70,9 +70,9 @@ def get_model(inference=False,
                                     logmag_weight=1,
                                     name='audio_stft_loss'),
                 losses.ReverbRegularizer(name='reverb_regularizer'),
-                losses.LoudnessLoss(target_key=f"add_{n_synths - 1}",
-                                    synth_key="reverb",
-                                    name="reverb_loudness")
+                # losses.LoudnessLoss(target_key=f"add_{n_synths - 1}",
+                #                     synth_key="reverb",
+                #                     name="reverb_loudness")
                 ]
     )
     return model
