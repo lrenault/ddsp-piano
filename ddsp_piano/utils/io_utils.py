@@ -104,7 +104,7 @@ def load_midi_as_conditioning(mid_path,
 
     # Set target length to an integer number of seconds
     if duration is None:
-        target_n_frames = np.ceil(note_sequence.total_time) * frame_rate
+        target_n_frames = int(np.ceil(note_sequence.total_time) * frame_rate)
     else:
         target_n_frames = int(duration * frame_rate)
 

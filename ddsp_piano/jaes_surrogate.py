@@ -2,15 +2,21 @@ import ddsp
 import tensorflow as tf
 
 from ddsp.training.nn import Normalize
-from ddsp_piano.data_pipeline import get_dummy_data
-from ddsp_piano.modules import PianoModel, sub_modules, losses
-from ddsp_piano.modules.inharm_synth import MultiInharmonic
+from ddsp_piano.modules import PianoModel, sub_modules, inharm_synth, \
+    surrogate_synth, losses
+from ddsp_piano.default_model import build_model
 
 tfkl = tf.keras.layers
 
 
+def offset_sigmoid(x, max_value=2.0, offset=1.0, threshold=1e-7):
+    x = ddsp.core.tf_float32(x)
+    return max_value * tf.nn.sigmoid(x - offset) + threshold
+
+
 def build_polyphonic_processor_group(n_synths=16,
                                      n_piano_models=10,
+                                     frame_rate=250,
                                      sample_rate=16000,
                                      duration=3,
                                      reverb_duration=None,
@@ -34,15 +40,18 @@ def build_polyphonic_processor_group(n_synths=16,
     reverb_length = int(reverb_duration * sample_rate)
 
     # Init synthesizers
-    noise = ddsp.synths.FilteredNoise(name='noise', n_samples=n_samples)
-    additive = MultiInharmonic(name='additive',
-                               n_samples=n_samples,
-                               sample_rate=sample_rate,
-                               inference=inference)
+    noise = ddsp.synths.FilteredNoise(name='noise', n_samples=n_samples,
+                                      scale_fn=offset_sigmoid)
+    additive = surrogate_synth.SurrogateAdditive(name='additive',
+                                                 frame_rate=frame_rate,
+                                                 sample_rate=sample_rate,
+                                                 scale_fn=offset_sigmoid,
+                                                 inference=inference)
     # DAG constructor
     dag = []
     dag.append((noise, ['magnitudes_0']))
     dag.append((additive, ['amplitudes_0',
+                           'complex_amplitudes_0',
                            'harmonic_distribution_0',
                            'inharm_coef_0',
                            'f0_hz_0']))
@@ -53,6 +62,7 @@ def build_polyphonic_processor_group(n_synths=16,
     for i in range(1, n_synths):
         # Synthesize monophonic additive component
         dag.append((additive, [f'amplitudes_{i}',
+                               f'complex_amplitudes_{i}',
                                f'harmonic_distribution_{i}',
                                f'inharm_coef_{i}',
                                f'f0_hz_{i}']))
@@ -81,8 +91,9 @@ def build_polyphonic_processor_group(n_synths=16,
 def get_model(inference=False,
               duration=3,
               n_synths=16,
-              n_substrings=2,
-              n_piano_models=10,
+              n_substrings=1,
+              n_partials=2,
+              n_piano_models=1,
               piano_embedding_dim=16,
               n_noise_filter_banks=64,
               frame_rate=250,
@@ -93,9 +104,16 @@ def get_model(inference=False,
                                            z_dim=piano_embedding_dim,
                                            n_frames=int(duration * frame_rate))
     note_release = sub_modules.NoteRelease(frame_rate=frame_rate)
-    parallelizer = sub_modules.Parallelizer(n_synths=n_synths)
-    inharm_model = sub_modules.InharmonicityNetwork()
-    detuner = sub_modules.Detuner(n_substrings=n_substrings)
+    parallelizer = sub_modules.Parallelizer(n_synths=n_synths,
+                                            mono_keys=('f0_hz',
+                                                       'inharm_coef',
+                                                       'amplitudes',
+                                                       'complex_amplitudes',
+                                                       'harmonic_distribution',
+                                                       'magnitudes'))
+    inharm_model = sub_modules.ParametricTuning()
+    complex_amp = sub_modules.SurrogateAmpModule()
+    harmonic_masking = sub_modules.PartialMasking(n_partials=n_partials)
     reverb_model = sub_modules.MultiInstrumentReverb(
         n_instruments=n_piano_models,
         reverb_length=int(reverb_duration * sample_rate)
@@ -103,6 +121,7 @@ def get_model(inference=False,
     # Neural modules
     context_network = sub_modules.ContextNetwork(
         name='context_net',
+        normalize_pitch=True,
         layers=[tfkl.Dense(32, activation=tf.nn.leaky_relu),
                 tfkl.GRU(64, return_sequences=True),
                 Normalize('layer')]
@@ -110,14 +129,14 @@ def get_model(inference=False,
     monophonic_network = sub_modules.MonophonicNetwork(
         name='mono_net',
         layers=[tfkl.Dense(128, activation=tf.nn.leaky_relu),
-                tfkl.GRU(192, return_sequences=True),
-                tfkl.Dense(192, activation=tf.nn.leaky_relu),
-                Normalize('layer')]
+                Normalize('layer'),
+                tfkl.GRU(128, return_sequences=True),
+                tfkl.Dense(128, activation=tf.nn.leaky_relu)]
     )
-
     processor_group = build_polyphonic_processor_group(
         n_synths=n_synths,
         n_piano_models=n_piano_models,
+        frame_rate=frame_rate,
         sample_rate=sample_rate,
         duration=duration,
         reverb_duration=reverb_duration,
@@ -131,7 +150,8 @@ def get_model(inference=False,
         parallelizer=parallelizer,
         monophonic_network=monophonic_network,
         inharm_model=inharm_model,
-        detuner=detuner,
+        complex_amp=complex_amp,
+        # harmonic_masking=harmonic_masking,
         reverb_model=reverb_model,
         processor_group=processor_group,
         losses=[losses.SpectralLoss(loss_type='L1',
@@ -143,27 +163,7 @@ def get_model(inference=False,
     return model
 
 
-def build_model(model, batch_size=6, first_phase=False, **kwargs):
-    """Finish model building by forwarding a batch sample.
-    Args:
-        - model (PianoModel): declared model to build.
-        - batch_size (int): number of samples to handle simulatenously.
-        - first_phase (bool): apply first phase training strategy.
-    Returns:
-        - model (PianoModel): built model.
-    """
-
-    # Toggle submodules trainability
-    model.alternate_training(first_phase=first_phase)
-
-    # Model building by forwarding a batch sample
-    batch = get_dummy_data(batch_size=batch_size, **kwargs)
-    _ = model(batch, training=True, return_losses=True)
-    # Print model summary
-    model.summary()
-
-    return model
-
-
 if __name__ == '__main__':
-    model = build_model(get_model())
+    import os; os.environ['CUDA_VISIBLE_DEVICES'] = "-1"
+    model = build_model(get_model(), first_phase=True)
+    import pdb; pdb.set_trace()

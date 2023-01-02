@@ -8,11 +8,14 @@ from os.path import join
 from ddsp.training import trainers, train_util, summaries
 from tensorflow.summary import create_file_writer, scalar
 
-from ddsp_piano.default_model import build_model  # , get_model
-from ddsp_piano.jaes_model import get_model
+from ddsp_piano.default_model import build_model, get_model
+# from ddsp_piano.jaes_model import get_model
+# from ddsp_piano.jaes_exp_tanh import get_model
+# from ddsp_piano.jaes_relu import get_model
 from ddsp_piano.data_pipeline \
     import get_training_dataset, get_validation_dataset
 from ddsp_piano.utils.io_utils import collect_garbage
+from ddsp_piano.utils.summaries import inharm_summary, detune_summary
 
 
 def process_args():
@@ -67,7 +70,9 @@ def main(args):
         - maestro_path (path): maestro dataset location.
         - exp_dir (path): folder to store experiment results and logs.
     """
+    # TODO (lrenault): remove
     from admis.io_utils import lock_gpu; lock_gpu()
+
     # Format training phase strategy
     first_phase_strat = ((args.phase % 2) == 1)
 
@@ -127,7 +132,9 @@ def main(args):
                     losses = trainer.train_step(train_iterator)
                     # Retrieve loss values
                     for k in loss_keys:
-                        epoch_losses[k] += float(losses[k])
+                        epoch_losses[k] += float(tf.debugging.check_numerics(
+                            losses[k],
+                            message=f"Nan loss at step {trainer.step}"))
 
                 # Write loss values in tensorboard
                 print("Training loss:",
@@ -136,6 +143,9 @@ def main(args):
                     scalar('train_loss/' + k,
                            loss / args.steps_per_epoch,
                            step=step)
+                if not first_phase_strat:
+                    inharm_summary(model.inharm_model, step=step)
+                    detune_summary(model.inharm_model, step=step)
 
                 # Save model epoch before validation
                 shutil.rmtree(join(exp_dir, "last_iter"))

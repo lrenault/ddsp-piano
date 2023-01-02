@@ -30,8 +30,10 @@ class PianoModel(Model):
                  context_network=None,
                  parallelizer=None,
                  monophonic_network=None,
+                 complex_amp=None,
                  inharm_model=None,
                  detuner=None,
+                 harmonic_masking=None,
                  reverb_model=None,
                  processor_group=None,
                  losses=None,
@@ -42,8 +44,10 @@ class PianoModel(Model):
         self.context_network = context_network
         self.parallelizer = parallelizer
         self.monophonic_network = monophonic_network
+        self.complex_amp = complex_amp
         self.inharm_model = inharm_model
         self.detuner = detuner
+        self.harmonic_masking = harmonic_masking
         self.reverb_model = reverb_model
         self.processor_group = processor_group
 
@@ -67,7 +71,8 @@ class PianoModel(Model):
         # Modules involved with partial frequency computing are frozen during
         # the first training phase strategy.
         for module in [self.inharm_model,
-                       self.detuner]:
+                       self.detuner,
+                       self.complex_amp]:
             if module is not None:
                 module.trainable = not first_phase
 
@@ -87,24 +92,25 @@ class PianoModel(Model):
 
     def compute_global_features(self, features, training):
         """Call all modules computing global features."""
-        if self.z_encoder is not None:
-            features.update(self.z_encoder(features, training=training))
-        if self.context_network is not None:
-            features.update(self.context_network(features, training=training))
-        if self.reverb_model is not None:
-            features.update(self.reverb_model(features, training=training))
+        for sub_module in [self.z_encoder,
+                           self.context_network,
+                           self.reverb_model]:
+            if sub_module is not None:
+                features.update(sub_module(features, training=training))
+
         return features
 
     def compute_monophonic_features(self, features, training):
         """Call all modules computing monophonic features."""
-        if self.note_release is not None:
-            features.update(self.note_release(features, training=training))
-        if self.inharm_model is not None:
-            features.update(self.inharm_model(features, training=training))
-        if self.detuner is not None:
-            features.update(self.detuner(features, training=training))
-        if self.monophonic_network is not None:
-            features.update(self.monophonic_network(features, training=training))
+        for sub_module in [self.note_release,
+                           self.inharm_model,
+                           self.detuner,
+                           self.monophonic_network,
+                           self.complex_amp,
+                           self.harmonic_masking]:
+            if sub_module is not None:
+                features.update(sub_module(features, training=training))
+
         return features
 
     def get_audio_from_outputs(self, outputs):

@@ -2,9 +2,9 @@ import ddsp
 import tensorflow as tf
 
 from ddsp.training.nn import Normalize
-from ddsp_piano.modules import PianoModel, sub_modules, losses
-from ddsp_piano.default_model import build_model, \
-    build_polyphonic_processor_group
+from ddsp_piano.modules import PianoModel, sub_modules, inharm_synth, \
+    surrogate_synth, losses
+from ddsp_piano.default_model import build_model, build_polyphonic_processor_group
 
 tfkl = tf.keras.layers
 
@@ -13,6 +13,7 @@ def get_model(inference=False,
               duration=3,
               n_synths=16,
               n_substrings=1,
+              n_partials=16,
               n_piano_models=1,
               piano_embedding_dim=16,
               n_noise_filter_banks=64,
@@ -24,9 +25,15 @@ def get_model(inference=False,
                                            z_dim=piano_embedding_dim,
                                            n_frames=int(duration * frame_rate))
     note_release = sub_modules.NoteRelease(frame_rate=frame_rate)
-    parallelizer = sub_modules.Parallelizer(n_synths=n_synths)
+    parallelizer = sub_modules.Parallelizer(n_synths=n_synths,
+                                            mono_keys=('f0_hz',
+                                                       'inharm_coef',
+                                                       'amplitudes',
+                                                       'harmonic_distribution',
+                                                       'magnitudes'))
     inharm_model = sub_modules.ParametricTuning()
-    detuner = sub_modules.Detuner(n_substrings=n_substrings)
+    complex_amp = sub_modules.SurrogateAmpModule()
+    harmonic_masking = sub_modules.PartialMasking(n_partials=n_partials)
     reverb_model = sub_modules.MultiInstrumentReverb(
         n_instruments=n_piano_models,
         reverb_length=int(reverb_duration * sample_rate)
@@ -45,10 +52,8 @@ def get_model(inference=False,
                 tfkl.Dense(192, activation=tf.nn.leaky_relu),
                 Normalize('layer')]
     )
-
     processor_group = build_polyphonic_processor_group(
         n_synths=n_synths,
-        n_substrings=n_substrings,
         n_piano_models=n_piano_models,
         sample_rate=sample_rate,
         duration=duration,
@@ -63,6 +68,8 @@ def get_model(inference=False,
         parallelizer=parallelizer,
         monophonic_network=monophonic_network,
         inharm_model=inharm_model,
+        # complex_amp=complex_amp,
+        # harmonic_masking=harmonic_masking,
         reverb_model=reverb_model,
         processor_group=processor_group,
         losses=[losses.SpectralLoss(loss_type='L1',
@@ -79,4 +86,6 @@ def get_model(inference=False,
 
 
 if __name__ == '__main__':
-    model = build_model(get_model())
+    import os; os.environ['CUDA_VISIBLE_DEVICES'] = "-1"
+    model = build_model(get_model(), first_phase=True)
+    import pdb; pdb.set_trace()

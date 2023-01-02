@@ -100,14 +100,15 @@ class InHarmonic(processors.Processor):
                 harmonic_distribution,
                 self.sample_rate
             )
-            # Set amplitude to zero if above hearable
+            # Set amplitude to zero if below hearable
             amplitudes *= core.tf_float32(tf.greater(f0_hz,
                                                      self.min_frequency))
         # Normalize
         if self.use_amplitude:
-            harmonic_distribution /= tf.reduce_sum(harmonic_distribution,
-                                                   axis=-1,
-                                                   keepdims=True)
+            harmonic_distribution = core.safe_divide(
+                harmonic_distribution,
+                tf.reduce_sum(harmonic_distribution, axis=-1, keepdims=True)
+            )
         else:
             amplitudes = tf.ones_like(amplitudes)
 

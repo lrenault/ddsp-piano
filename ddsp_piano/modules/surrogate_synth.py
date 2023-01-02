@@ -5,7 +5,7 @@ from ddsp_piano.modules.inharm_synth import get_inharmonic_freq
 
 def complex_harmonic_synthesis(frequencies,
                                amplitudes,
-                               complex_amplitudes,
+                               complex_amplitudes=None,
                                harmonic_shifts=None,
                                harmonic_distribution=None,
                                upsampling=64,
@@ -36,7 +36,6 @@ def complex_harmonic_synthesis(frequencies,
     """
     frequencies = core.tf_float32(frequencies)
     amplitudes = core.tf_float32(amplitudes)
-    complex_amplitudes = core.tf_float32(complex_amplitudes)
 
     batch_size = int(frequencies.shape[0])
     n_frames = int(frequencies.shape[1])
@@ -46,6 +45,7 @@ def complex_harmonic_synthesis(frequencies,
         harmonic_distribution = core.tf_float32(harmonic_distribution)
         n_harmonics = int(harmonic_distribution.shape[-1])
     elif harmonic_shifts is not None:
+        harmonic_shifts = core.tf_float32(harmonic_shifts)
         n_harmonics = int(harmonic_shifts.shape[-1])
     else:
         n_harmonics = 1
@@ -63,19 +63,24 @@ def complex_harmonic_synthesis(frequencies,
         harmonic_amplitudes = amplitudes
 
     # Upsample to audio rate
-    amplitude_envelopes = core.resample(harmonic_frequencies, n_samples,
+    amplitude_envelopes = core.resample(harmonic_amplitudes, n_samples,
                                         method=amp_resample_method)
     frequency_envelopes = core.resample(harmonic_frequencies, n_samples)
 
     # Compute real exp decay of complex amplitudes
-    complex_t = tf.range(upsampling)[tf.newaxis, ..., tf.newaxis]  # (1, upsampling, 1)
-    complex_t = tf.tile(complex_t, [batch_size, n_frames, n_harmonics])  # (batch, n_samples, n_harmonics)
-    complex_amp_env = tf.repeat(complex_amplitudes, upsampling, axis=1) # (batch, n_samples, n_harmonics)
-    complex_amp_env = tf.math.pow(tf.math.sqrt(tf.math.square(complex_amp_env)),
-                                  complex_t)
+    if complex_amplitudes is not None:
+        complex_amplitudes = core.tf_float32(complex_amplitudes)
 
-    # Multiply amplitudes deduced from complex with real amplitudes
-    amplitude_envelopes *= complex_amp_env
+        # TODO (lrenault): do not reset timestep count every upsampling rate as
+        # this introduces discontinuities. Use new module ala NoteReleaseCell.
+        complex_t = tf.range(upsampling, dtype=tf.float32)[tf.newaxis, ..., tf.newaxis]  # (1, upsampling, 1)
+        complex_t = tf.tile(complex_t, [batch_size, n_frames, n_harmonics])  # (batch, n_samples, n_harmonics)
+        complex_amp_env = tf.repeat(complex_amplitudes, upsampling, axis=1) # (batch, n_samples, n_harmonics)
+        complex_amp_env = tf.math.pow(tf.math.sqrt(tf.math.square(complex_amp_env)),
+                                      complex_t)
+
+        # Multiply amplitudes deduced from complex with real amplitudes
+        amplitude_envelopes *= complex_amp_env
 
     # Synthesize audio from harmonics (batch, n_samples)
     audio = core.oscillator_bank(frequency_envelopes,
@@ -86,8 +91,13 @@ def complex_harmonic_synthesis(frequencies,
 
 
 class SurrogateAdditive(processors.Processor):
-    """Surrogate synthesizer with inharmonic sinusoidal oscillators optimazable
-    using complex amplitudes"""
+    """Surrogate synthesizer with inharmonic sinusoidal oscillators optimizable
+    using complex amplitudes.
+    Args:
+        - frame_rate (int): number of frame-wise controls per second.
+        - sample_rate (int): audio sample rate.
+        - min_frequency (int): 
+    """
     def __init__(self,
                  frame_rate=250,
                  sample_rate=16000,
@@ -126,7 +136,7 @@ class SurrogateAdditive(processors.Processor):
         if self.scale_fn is not None:
             amplitudes = self.scale_fn(amplitudes)
             harmonic_distribution = self.scale_fn(harmonic_distribution)
-            # complex_amplitudes = self.scale_fn(complex_amplitudes)
+            complex_amplitudes = self.scale_fn(complex_amplitudes)
 
         n_harmonics = int(harmonic_distribution.shape[-1])
 
@@ -139,7 +149,7 @@ class SurrogateAdditive(processors.Processor):
                 harmonic_distribution,
                 self.sample_rate
             )
-            # Set amplitude to zero if above hearable
+            # Set amplitude to zero if below hearable
             amplitudes *= core.tf_float32(tf.greater(f0_hz,
                                                      self.min_frequency))
         # Normalize

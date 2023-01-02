@@ -16,10 +16,13 @@ class ContextNetwork(nn.OutputSplitsLayer):
     def __init__(self,
                  layers,
                  output_splits=(('context', 32),),
+                 normalize_pitch=False,
                  **kwargs):
         super(ContextNetwork, self).__init__(output_splits=output_splits,
                                              **kwargs)
         self.model = tf.keras.Sequential(layers=layers)
+        self.normalize_pitch = normalize_pitch
+        self.midi_norm = 128.
 
     @property
     def layers(self):
@@ -42,6 +45,9 @@ class ContextNetwork(nn.OutputSplitsLayer):
             - pedal (batch, n_frames, 4): pedal signals inputs.
             - z (batch, n_frames, z_dim): model embedding pooled over time.
         """
+        if self.normalize_pitch:
+            conditioning = conditioning / [self.midi_norm, 1.]
+
         x = tf.concat([self.collapse_last_axis(conditioning), pedal, z],
                       axis=-1)
         x = self.model(x)
@@ -98,9 +104,22 @@ class Parallelizer(tfkl.Layer):
         - n_synths (int): size of polypohny axis.
     """
 
-    def __init__(self, n_synths=16, **kwargs):
+    def __init__(self,
+                 n_synths=16,
+                 global_keys=('conditioning',
+                              'context',
+                              'global_inharm',
+                              'global_detuning'),
+                 mono_keys=('f0_hz',
+                            'inharm_coef',
+                            'amplitudes',
+                            'harmonic_distribution',
+                            'magnitudes'),
+                 **kwargs):
         super(Parallelizer, self).__init__(**kwargs)
         self.n_synths = n_synths
+        self.global_keys = global_keys
+        self.mono_keys = mono_keys
 
     def build(self, input_shape):
         self.batch_size = input_shape['conditioning'][0]
@@ -135,22 +154,13 @@ class Parallelizer(tfkl.Layer):
         )
         return tf.reshape(x, new_shape)
 
-    def parallelize(self, features,
-                    keys=('conditioning',
-                          'context',
-                          'global_inharm',
-                          'global_detuning')):
-        for k in keys:
+    def parallelize(self, features):
+        for k in self.global_keys:
             features[k] = self.put_polyphony_axis_at_first(features[k])
             features[k] = self.parallelize_feature(features[k])
         return features
 
-    def unparallelize(self, features,
-                      keys=('f0_hz',
-                            'inharm_coef',
-                            'amplitudes',
-                            'harmonic_distribution',
-                            'magnitudes')):
+    def unparallelize(self, features):
         """Disentangle batch and polyphony axis and distribute features as
         monophonic controls.
         Args:
@@ -158,7 +168,7 @@ class Parallelizer(tfkl.Layer):
             - keys (list(string)): list of feature keys to unparallelize and
             create monophonic controls.
         """
-        for k in keys:
+        for k in self.mono_keys:
             features[k] = self.unparallelize_feature(features[k])
             for i in range(self.n_synths):
                 features[k + f'_{i}'] = features[k][i]
@@ -225,8 +235,6 @@ class InharmonicityNetwork(nn.DictLayer):
                                                 initializer='zero',
                                                 regularizer=tf.keras.regularizers.L1(0.1),
                                                 trainable=True)
-        self.trainable = False
-
         super(InharmonicityNetwork, self).build(input_shape)
 
     def call(self, extended_pitch, global_inharm=None) -> ['inharm_coef']:
@@ -307,7 +315,49 @@ class Detuner(nn.DictLayer):
         return midi_to_hz(extended_pitch)
 
 
-class ParametricTuning(nn.DictLayer):
+class DeepDetuner(nn.DictLayer):
+    """ Compute a detuning factor for each input MIDI note.
+    Args:
+        - n_substrings (int): number of piano strings per note.
+        - use_detune (bool): use the predicted detuning for converting MIDI
+        pitch to Hz.
+    """
+
+    def __init__(self, n_substrings=2, use_detune=True, name='detuner', **kwargs):
+        super(DeepDetuner, self).__init__(name=name, **kwargs)
+        self.n_substrings = n_substrings
+        self.use_detune = use_detune
+
+        self.hidden_layers = nn.FcStack(ch=32, layers=3)
+        self.out_layer = tfkl.Dense(self.n_substrings,
+                                    activation='tanh',
+                                    kernel_initializer='zeros',
+                                    bias_initializer='zeros',
+                                    trainable=False)
+
+    def call(self, extended_pitch, global_detuning=None) -> ['f0_hz']:
+        """ Forward pass
+        Args:
+            - extended_pitch (batch, ..., 1): input active notes.
+            - global_detuning (batch, ..., 1): global detuning from
+            piano type.
+        Returns:
+            - detuned_factors (batch, ..., n_substrings): detuning factor
+            for each substring.
+         """
+        if self.use_detune:
+            detuning = self.out_layer(self.hidden_layers(extended_pitch / 128.))
+
+            if global_detuning is not None:
+                global_detuning = tf.math.tanh(global_detuning)
+                detuning += global_detuning
+
+            extended_pitch += detuning
+
+        return midi_to_hz(extended_pitch)
+
+
+class ParametricTuning(InharmonicityNetwork):
     """Parametric model for piano tuning, for note inharmonicity and detuning
     according to Rigaud et al. 'A parametric model of piano tuning' (DAFx-11)
     Params:
@@ -326,9 +376,6 @@ class ParametricTuning(nn.DictLayer):
     def __init__(self, name='parametric_tuning', **kwargs):
         super(ParametricTuning, self).__init__(name=name, **kwargs)
 
-        # Inharmonicity network
-        self.inharm_model = InharmonicityNetwork()
-
         # Reference note
         self.reference_a = tf.convert_to_tensor(69., dtype=tf.float32)
 
@@ -338,30 +385,30 @@ class ParametricTuning(nn.DictLayer):
         self.low_bass_asymptote = 4.51 - 1  # K
         self.erf = tf.math.tanh
 
+    def inharm_model(self, *args):
+        return super(ParametricTuning, self).call(*args)
+
     def streching_model(self, notes):  # rho
         rho = 1 - self.erf((notes - self.pitch_translation) / self.decrease_slope)
         rho *= self.low_bass_asymptote / 2
         rho += 1
         return rho
 
-    def get_deviation_from_ET(self, notes):
+    def get_deviation_from_ET(self, notes, global_inharm=None):
         # Get distance from reference note (A4)
-        reference_inharm_coef = self.dict_to_list(self.inharm_model(self.reference_a))
+        reference_inharm_coef = self.inharm_model(self.reference_a, global_inharm)
         ratio = midi_to_hz(notes) / midi_to_hz(self.reference_a)
 
         # Compute deviation from equal temperament of octave A
         detuning = 1 + reference_inharm_coef * (ratio * self.streching_model(notes))**2
-        detuning /= 1 + self.dict_to_list(self.inharm_model(notes)) * self.streching_model(notes)**2
+        detuning /= 1 + self.inharm_model(notes, global_inharm) * self.streching_model(notes)**2
         detuning = tf.math.sqrt(detuning)
 
         return detuning
 
-    def dict_to_list(self, inharm_coef):
-        return inharm_coef["inharm_coef"]
-
-    def call(self, extended_pitch) -> ['f0_hz', 'inharm_coef']:
-        inharm_coef = self.dict_to_list(self.inharm_model(extended_pitch))
-        detuning = self.get_deviation_from_ET(extended_pitch)
+    def call(self, extended_pitch, global_inharm=None) -> ['f0_hz', 'inharm_coef']:
+        inharm_coef = self.inharm_model(extended_pitch, global_inharm)
+        detuning = self.get_deviation_from_ET(extended_pitch, global_inharm)
 
         f0_hz = midi_to_hz(extended_pitch) * detuning
 
@@ -560,18 +607,36 @@ class PartialMasking(nn.DictLayer):
         self.n_partials = n_partials
 
     def call(self, harmonic_distribution) -> ['harmonic_distribution']:
-        n_synths, batch, n_frames, n_harmonics = tf.shape(harmonic_distribution)
+        batch = tf.shape(harmonic_distribution)[0]
+        n_frames = tf.shape(harmonic_distribution)[1]
+        n_harmonics = tf.shape(harmonic_distribution)[2]
 
         # Build the partial index
-        partial_index = tf.range(n_harmonics)
-        partial_index = tf.reshape(mask, [1, 1, 1, n_harmonics])
-        partial_index = tf.tile(mask, (n_synths, batch, n_frames, 1))
+        partial_index = tf.range(n_harmonics)[tf.newaxis, tf.newaxis, ...]
+        partial_index = tf.tile(partial_index, [batch, n_frames, 1])
 
         # Set higher partial amplitudes to zero
         harmonic_distribution = tf.where(
             tf.less(partial_index, self.n_partials),
             harmonic_distribution,
-            tf.zeros_like(harmonic_distribution)
+            -10. * tf.ones_like(harmonic_distribution)
         )
         return harmonic_distribution
-        
+
+
+class SurrogateAmpModule(nn.DictLayer):
+    """docstring for SurrogateAmpModule"""
+    def __init__(self, n_harmonics=96, n_layers=3, **kwargs):
+        super(SurrogateAmpModule, self).__init__(**kwargs)
+        self.midi_norm = 128.
+        self.n_harmonics = n_harmonics
+        layers = [tfkl.Dense(88, activation=tf.nn.leaky_relu) for _ in range(n_layers - 1)]
+        layers += [tfkl.Dense(n_harmonics, activation='relu',
+                              bias_initializer='ones',
+                              kernel_initializer='zeros'), ]
+        self.model = tf.keras.Sequential(layers=layers)
+
+    def call(self, extended_pitch) -> ['complex_amplitudes']:
+        # Extended pitch (batch, n_frames, 16)
+        complex_amplitudes = self.model(extended_pitch / self.midi_norm)
+        return complex_amplitudes
