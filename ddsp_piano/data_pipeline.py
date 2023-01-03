@@ -298,6 +298,69 @@ def get_dataset(filename,
     return dataset
 
 
+def get_15mins_dataset(midi_filename="/data3/anasynth_nonbp/renault/cache/15mins_train.midi",
+                       audio_filename="/data3/anasynth_nonbp/renault/cache/15mins_train.wav",
+                       batch_size=6,
+                       duration=3,
+                       sample_rate=16000,
+                       frame_rate=250,
+                       num_parallel_calls=8):
+    audio, conditioning, pedal, polyphony = io_utils.load_data(
+        audio_filename,
+        midi_filename,
+        max_polyphony=16,
+        sample_rate=sample_rate,
+        frame_rate=frame_rate,
+    )
+    # Split track into segments
+    dataset = {
+        "audio": io_utils.split_sequence(audio, duration, sample_rate),
+        "conditioning": io_utils.split_sequence(conditioning, duration, frame_rate),
+        "pedal": io_utils.split_sequence(pedal, duration, frame_rate),
+        "polyphony": io_utils.split_sequence(polyphony, duration, frame_rate)
+    }
+    # Fix border issue
+    n_segments = tf.reduce_min([len(dataset["audio"]),
+                                len(dataset["conditioning"])])
+    for k in dataset.keys():
+        dataset[k] = dataset[k][:n_segments]
+
+    # Convert to tf.data.Dataset
+    dataset = tf.data.Dataset.from_tensor_slices(dataset)
+
+    # Filter out segments with polyphony exceedings polyphonic capacity
+    dataset = dataset.filter(
+        lambda sample: tf.reduce_max(sample["polyphony"]) <= 16)
+    # Add piano model
+    dataset = dataset.map(
+        lambda sample: dict(
+            sample,
+            piano_model=tf.zeros(1, dtype=tf.int32)))
+
+    # Make batch
+    dataset = dataset.padded_batch(
+        batch_size,
+        padded_shapes={
+            "audio": tf.TensorShape([int(duration * sample_rate), ]),
+            "conditioning": tf.TensorShape([int(duration * frame_rate), 16, 2]),
+            "pedal": tf.TensorShape([int(duration * frame_rate), 4]),
+            "polyphony": tf.TensorShape([int(duration * frame_rate), ]),
+            "piano_model": tf.TensorShape([1, ]),
+        })
+    # Drop batch if dataset exhausted
+    dataset = dataset.filter(
+        lambda sample: tf.equal(batch_size, tf.shape(sample['audio'])[0]))
+    # Prefetch
+    dataset = dataset.prefetch(4)
+
+    # Sharding options
+    options = tf.data.Options()
+    options.experimental_distribute.auto_shard_policy = tf.data.experimental.AutoShardPolicy.DATA
+    dataset = dataset.with_options(options)
+
+    return dataset
+
+
 def save_dataset(dataset, filename):
     # Save preprocessed data
     tf.data.experimental.save(dataset, filename)

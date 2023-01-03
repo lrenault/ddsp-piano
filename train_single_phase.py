@@ -9,9 +9,6 @@ from ddsp.training import trainers, train_util, summaries
 from tensorflow.summary import create_file_writer, scalar
 
 from ddsp_piano.default_model import build_model, get_model
-# from ddsp_piano.jaes_model import get_model
-# from ddsp_piano.jaes_exp_tanh import get_model
-# from ddsp_piano.jaes_relu import get_model
 from ddsp_piano.data_pipeline \
     import get_training_dataset, get_validation_dataset
 from ddsp_piano.utils.io_utils import collect_garbage
@@ -59,6 +56,20 @@ def process_args():
     return parser.parse_args()
 
 
+def lock_gpu(soft=True, gpu_device_id=-1):
+    try:
+        id_locked = gpl.get_gpu_lock(gpu_device_id=gpu_device_id, soft=soft)
+        print(f"Locked GPU {id_locked}")
+    except gpl.NoGpuManager:
+        id_locked = None
+        print("No gpu manager available - will use all available GPUs")
+    except gpl.NoGpuAvailable:
+        # no GPU available for locking, continue with CPU
+        id_locked = None
+        os.environ["CUDA_VISIBLE_DEVICES"] = ""
+    return id_locked
+
+
 def main(args):
     """Training loop script.
     Args:
@@ -70,8 +81,7 @@ def main(args):
         - maestro_path (path): maestro dataset location.
         - exp_dir (path): folder to store experiment results and logs.
     """
-    # TODO (lrenault): remove
-    from admis.io_utils import lock_gpu; lock_gpu()
+    _ = lock_gpu()
 
     # Format training phase strategy
     first_phase_strat = ((args.phase % 2) == 1)
