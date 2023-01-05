@@ -1,5 +1,5 @@
 import tensorflow as tf
-
+from numpy import pi
 from ddsp import core
 from ddsp import processors
 
@@ -36,15 +36,92 @@ def get_inharmonic_freq(f0_hz, inharm_coef, n_harmonics):
     return inharmonic_freq, harmonic_shifts
 
 
+def cos_oscillator_bank(frequency_envelopes,
+                        amplitude_envelopes,
+                        sample_rate=16000,
+                        sum_sinusoids=True,
+                        use_angular_cumsum=False):
+    frequency_envelopes = core.tf_float32(frequency_envelopes)
+    amplitude_envelopes = core.tf_float32(amplitude_envelopes)
+
+    # Don't exceed Nyquist.
+    amplitude_envelopes = core.remove_above_nyquist(frequency_envelopes,
+                                                    amplitude_envelopes,
+                                                    sample_rate)
+    # Angular frequency, Hz -> radians per sample.
+    omegas = frequency_envelopes * (2.0 * pi)  # rad / sec
+    omegas = omegas / float(sample_rate)  # rad / sample
+
+    # Accumulate phase and synthesize.
+    if use_angular_cumsum:
+        # Avoids accumulation errors.
+        phases = core.angular_cumsum(omegas)
+    else:
+        phases = tf.cumsum(omegas, axis=1)
+
+    # Convert to waveforms.
+    wavs = tf.cos(phases)
+    audio = amplitude_envelopes * wavs  # [mb, n_samples, n_sinusoids]
+    if sum_sinusoids:
+        audio = tf.reduce_sum(audio, axis=-1)  # [mb, n_samples]
+    return audio
+
+
+def harmonic_synthesis(frequencies,
+                       amplitudes,
+                       harmonic_shifts=None,
+                       harmonic_distribution=None,
+                       n_samples=64000,
+                       sample_rate=16000,
+                       amp_resample_method='window',
+                       sum_sinusoids=True,
+                       use_angular_cumsum=False):
+    frequencies = core.tf_float32(frequencies)
+    amplitudes = core.tf_float32(amplitudes)
+
+    if harmonic_distribution is not None:
+        harmonic_distribution = core.tf_float32(harmonic_distribution)
+        n_harmonics = int(harmonic_distribution.shape[-1])
+    elif harmonic_shifts is not None:
+        harmonic_shifts = core.tf_float32(harmonic_shifts)
+        n_harmonics = int(harmonic_shifts.shape[-1])
+    else:
+        n_harmonics = 1
+
+    # Create harmonic frequencies [batch_size, n_frames, n_harmonics].
+    harmonic_frequencies = core.get_harmonic_frequencies(frequencies, n_harmonics)
+    if harmonic_shifts is not None:
+        harmonic_frequencies *= (1.0 + harmonic_shifts)
+
+    # Create harmonic amplitudes [batch_size, n_frames, n_harmonics].
+    if harmonic_distribution is not None:
+        harmonic_amplitudes = amplitudes * harmonic_distribution
+    else:
+        harmonic_amplitudes = amplitudes
+
+    # Create sample-wise envelopes.
+    frequency_envelopes = core.resample(harmonic_frequencies, n_samples)  # cycles/sec
+    amplitude_envelopes = core.resample(harmonic_amplitudes, n_samples,
+                                        method=amp_resample_method)
+
+    # Synthesize from harmonics [batch_size, n_samples].
+    audio = cos_oscillator_bank(frequency_envelopes,
+                                amplitude_envelopes,
+                                sample_rate=sample_rate,
+                                sum_sinusoids=sum_sinusoids,
+                                use_angular_cumsum=use_angular_cumsum)
+    return audio
+
+
 class InHarmonic(processors.Processor):
     """Synthesize audio with a bank of inharmonic sinusoidal oscillators.
     Args:
         - n_samples (int): number of audio samples to generate.
         - sample_rate (int): sample per second.
         - min_frequency (int): minimum supported frequency (in Hz).
-        - use_amplitude (bool): use global amplitude or enable free harmonic
-        amplitudes.
-        - scale_fn (fn): scaliing function for network output post-processing.
+        - scale_fn (fn): scaling function for network outputs post-processing.
+        - normalize_harm_distribution (bool): whether to force the sum of
+        partial energy to 1.
         - normalize_below_nyquist (bool): set amplitude of frequencies abow
         Nyquist to 0.
         - inference (bool): use angular cumsum (for inference only).
@@ -54,15 +131,15 @@ class InHarmonic(processors.Processor):
                  n_samples=64000,
                  sample_rate=16000,
                  min_frequency=20,
-                 use_amplitude=True,
                  scale_fn=core.exp_sigmoid,
+                 normalize_harm_distribution=True,
                  normalize_below_nyquist=True,
                  inference=False,
                  name='inharmonic'):
         self.n_samples = n_samples
         self.sample_rate = sample_rate
         self.min_frequency = min_frequency
-        self.use_amplitude = use_amplitude
+        self.normalize_harm_distribution = normalize_harm_distribution
         self.scale_fn = scale_fn
         self.normalize_below_nyquist = normalize_below_nyquist
         self.inference = inference
@@ -104,13 +181,11 @@ class InHarmonic(processors.Processor):
             amplitudes *= core.tf_float32(tf.greater(f0_hz,
                                                      self.min_frequency))
         # Normalize
-        if self.use_amplitude:
+        if self.normalize_harm_distribution:
             harmonic_distribution = core.safe_divide(
                 harmonic_distribution,
                 tf.reduce_sum(harmonic_distribution, axis=-1, keepdims=True)
             )
-        else:
-            amplitudes = tf.ones_like(amplitudes)
 
         return {'amplitudes': amplitudes,
                 'harmonic_distribution': harmonic_distribution,
@@ -131,7 +206,7 @@ class InHarmonic(processors.Processor):
             from perfect harmonic frequencies.
             - f0_hz (batch, time, 1): fundamental frequency, in Hz.
         """
-        signal = core.harmonic_synthesis(
+        signal = harmonic_synthesis(
             frequencies=f0_hz,
             amplitudes=amplitudes,
             harmonic_shifts=harmonic_shifts,

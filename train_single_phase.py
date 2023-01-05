@@ -1,14 +1,17 @@
 import os
-import shutil
 import argparse
 import tensorflow as tf
+
+import manage_gpus as gpl
 
 from tqdm import tqdm
 from os.path import join
 from ddsp.training import trainers, train_util, summaries
 from tensorflow.summary import create_file_writer, scalar
 
-from ddsp_piano.default_model import build_model, get_model
+from ddsp_piano.default_model import build_model  # , get_model
+# from ddsp_piano.jaes_exp_tanh import get_model
+from ddsp_piano.jaes_no_harm_norm import get_model
 from ddsp_piano.data_pipeline \
     import get_training_dataset, get_validation_dataset
 from ddsp_piano.utils.io_utils import collect_garbage
@@ -98,7 +101,7 @@ def main(args):
         # Restore model and optimizer states
         if args.restore is not None:
             trainer.restore(args.restore)
-            print(f"Restored model from {args.restore}")
+            print(f"Restored model from {args.restore} at step {trainer.step.numpy()}")
 
     loss_keys = model._losses_dict.keys()
 
@@ -137,14 +140,14 @@ def main(args):
 
                 # Fit training data
                 epoch_losses = {k: 0. for k in loss_keys}
-                for _ in tqdm(range(args.steps_per_epoch)):
+                for _ in tqdm(range(args.steps_per_epoch), ncols=64):
                     # Train step
                     losses = trainer.train_step(train_iterator)
                     # Retrieve loss values
                     for k in loss_keys:
                         epoch_losses[k] += float(tf.debugging.check_numerics(
                             losses[k],
-                            message=f"Nan loss at step {trainer.step}"))
+                            message=f"Nan loss at step {trainer.step.numpy()} with loss {k}"))
 
                 # Write loss values in tensorboard
                 print("Training loss:",
@@ -158,13 +161,19 @@ def main(args):
                     detune_summary(model.inharm_model, step=step)
 
                 # Save model epoch before validation
-                shutil.rmtree(join(exp_dir, "last_iter"))
                 trainer.save(join(exp_dir, "last_iter"))
                 print('Last iteration model saved at',
                       join(exp_dir, "last_iter"))
 
                 # Skip validation during early training
                 if trainer.step < 60000:
+                    # Just add an audio summary without computing the val loss
+                    val_batch = next(iter(val_dataset))
+                    summaries.audio_summary(
+                        model(val_batch, training=True)["audio_synth"],
+                        step,
+                        sample_rate=16000,
+                        name='synthesized_audio')
                     collect_garbage()
                     continue
 
@@ -172,7 +181,8 @@ def main(args):
                 print("Validation...")
                 val_outs_summary = None
                 epoch_val_losses = {k: 0. for k in loss_keys}
-                for val_step, val_batch in enumerate(tqdm(val_dataset)):
+                for val_step, val_batch in enumerate(tqdm(val_dataset,
+                                                          ncols=64)):
                     # Validation step
                     outputs, val_losses = model(val_batch,
                                                 return_losses=True,

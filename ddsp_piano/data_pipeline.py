@@ -298,13 +298,14 @@ def get_dataset(filename,
     return dataset
 
 
-def get_15mins_dataset(midi_filename="/data3/anasynth_nonbp/renault/cache/15mins_train.midi",
-                       audio_filename="/data3/anasynth_nonbp/renault/cache/15mins_train.wav",
-                       batch_size=6,
-                       duration=3,
-                       sample_rate=16000,
-                       frame_rate=250,
-                       num_parallel_calls=8):
+def single_track_dataset(midi_filename,
+                         audio_filename,
+                         batch_size=1,
+                         duration=3,
+                         sample_rate=16000,
+                         frame_rate=250,
+                         num_parallel_calls=8):
+    # Load audio and MIDI data
     audio, conditioning, pedal, polyphony = io_utils.load_data(
         audio_filename,
         midi_filename,
@@ -313,17 +314,27 @@ def get_15mins_dataset(midi_filename="/data3/anasynth_nonbp/renault/cache/15mins
         frame_rate=frame_rate,
     )
     # Split track into segments
-    dataset = {
-        "audio": io_utils.split_sequence(audio, duration, sample_rate),
-        "conditioning": io_utils.split_sequence(conditioning, duration, frame_rate),
-        "pedal": io_utils.split_sequence(pedal, duration, frame_rate),
-        "polyphony": io_utils.split_sequence(polyphony, duration, frame_rate)
-    }
-    # Fix border issue
-    n_segments = tf.reduce_min([len(dataset["audio"]),
-                                len(dataset["conditioning"])])
-    for k in dataset.keys():
-        dataset[k] = dataset[k][:n_segments]
+    if len(conditioning) / float(frame_rate) > duration:
+        audio = io_utils.split_sequence(audio, duration, sample_rate)
+        conditioning = io_utils.split_sequence(conditioning, duration, frame_rate)
+        pedal = io_utils.split_sequence(pedal, duration, frame_rate)
+        polyphony = io_utils.split_sequence(polyphony, duration, frame_rate)
+
+        n_segments = min(len(audio), len(conditioning))
+
+        dataset = {"audio": audio,
+                   "conditioning": conditioning,
+                   "pedal": pedal,
+                   "polyphony": polyphony}
+        # Fix border issue
+        for k in dataset.keys():
+            dataset[k] = dataset[k][:n_segments]
+
+    else:
+        dataset = {"audio": [io_utils.ensure_sequence_length(audio, int(duration * sample_rate)), ],
+                   "conditioning": [io_utils.ensure_sequence_length(conditioning, int(duration * frame_rate)), ],
+                   "pedal": [io_utils.ensure_sequence_length(pedal, int(duration * frame_rate)), ],
+                   "polyphony": [io_utils.ensure_sequence_length(polyphony, int(duration * frame_rate)), ]}
 
     # Convert to tf.data.Dataset
     dataset = tf.data.Dataset.from_tensor_slices(dataset)
@@ -364,3 +375,9 @@ def get_15mins_dataset(midi_filename="/data3/anasynth_nonbp/renault/cache/15mins
 def save_dataset(dataset, filename):
     # Save preprocessed data
     tf.data.experimental.save(dataset, filename)
+
+
+def preprocess_data_into_tfrecord(filename, **kwargs):
+    """Parse through a maestro dataset and save preprocessing as tfrecord"""
+    dataset = get_preprocessed_dataset(**kwargs)
+    save_dataset(dataset, filename)
