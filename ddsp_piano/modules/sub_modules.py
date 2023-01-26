@@ -98,6 +98,37 @@ class MonophonicNetwork(nn.OutputSplitsLayer):
         return x
 
 
+class MonophonicDeepNetwork(MonophonicNetwork):
+    """Monophonic network using the same architecture as the original DDSP
+    decoder MLP layers."""
+    def __init__(self,
+                 rnn_channels=256,
+                 ch=256,
+                 layers_per_stack=3,
+                 **kwargs):
+        super().__init__(layers=nn.Rnn(rnn_channels, 'gru'), **kwargs)
+        # Layer creation
+        stack = lambda: nn.FcStack(ch, layers_per_stack)
+        # Layers
+        self.input_stacks = [stack() for _ in range(3)]
+        self.out_stack = stack()
+    
+    def compute_output(self, conditioning, extended_pitch, context):
+        # Initial processing
+        _extended_pitch = self.input_stacks[0](extended_pitch / self.midi_norm)
+        _conditioning = self.input_stacks[1](conditioning / [self.midi_norm, 1.])
+        _context = self.input_stacks[2](context)
+
+        # Rnn RNN over the latents
+        x = tf.concat([_extended_pitch, _conditioning, _context], axis=-1)
+        x = self.model(x)
+        x = tf.concat([_extended_pitch, _conditioning, _context, x], axis=-1)
+
+        # Final processing
+        x = self.out_stack(x)
+
+        return x
+
 class Parallelizer(tfkl.Layer):
     """Module for merging and unmerge the batch and polyphony axis of features.
     Args:
