@@ -129,6 +129,7 @@ class MonophonicDeepNetwork(MonophonicNetwork):
 
         return x
 
+
 class Parallelizer(tfkl.Layer):
     """Module for merging and unmerge the batch and polyphony axis of features.
     Args:
@@ -655,19 +656,56 @@ class PartialMasking(nn.DictLayer):
         return harmonic_distribution
 
 
-class SurrogateAmpModule(nn.DictLayer):
-    """docstring for SurrogateAmpModule"""
+class OnsetLinspaceCell(tfkl.Layer):
+    """Custom RNN cell for counting the frames since the last note onset."""
+
+    def __init__(self, **kwargs):
+        super(OnsetLinspaceCell, self).__init__(**kwargs)
+        self.state_size = 1
+
+    @tf.function
+    def call(self, onset_velocity, previous_state):
+        """ Reset time if new note.
+        Args:
+            - onset_velocity (batch, 1): onset velocity MIDI vector frame.
+            - previous_state (batch, 1): previous time step.
+        """
+        previous_time_frame = previous_state[0]
+
+        new_note = tf_float32(tf.greater(onset_velocity, 0))
+        reset_time = 1 - new_note  # 1 if sustained, 0 if new note
+
+        surrogate_time_frame = reset_time * (previous_time_frame + 1)
+
+        return surrogate_time_frame, [surrogate_time_frame]
+
+
+class SurrogateModule(nn.DictLayer):
+    """Predict amplitude and compute time parametrization for the
+    surrogate synthesis with the complex synthesizer
+    (see B.Hayes - Sinusoidal Frequency using Gradient Descent).
+    Args:
+        - n_harmonics (int): number of partials for each monophonic note.
+        - n_layers (int): number of hidden Dense layers.
+    Returns:
+        - complex_amplitudes (batch, n_frames, n_harmonics): per-harmonic
+        complex amplitude modulus.
+        - complex_timesteps (batch, n_frames, 1): time parametrization that
+        resets at each new note onset.
+    """
     def __init__(self, n_harmonics=96, n_layers=3, **kwargs):
-        super(SurrogateAmpModule, self).__init__(**kwargs)
+        super(SurrogateModule, self).__init__(**kwargs)
         self.midi_norm = 128.
         self.n_harmonics = n_harmonics
         layers = [tfkl.Dense(88, activation=tf.nn.leaky_relu) for _ in range(n_layers - 1)]
         layers += [tfkl.Dense(n_harmonics, activation='relu',
                               bias_initializer='ones',
                               kernel_initializer='zeros'), ]
-        self.model = tf.keras.Sequential(layers=layers)
+        self.amp_model = tf.keras.Sequential(layers=layers)
+        self.time_model = tfkl.RNN(OnsetLinspaceCell(), return_sequences=True)
 
-    def call(self, extended_pitch) -> ['complex_amplitudes']:
+    def call(self, conditioning, extended_pitch) -> ['complex_amplitudes', 'complex_time']:
         # Extended pitch (batch, n_frames, 16)
-        complex_amplitudes = self.model(extended_pitch / self.midi_norm)
-        return complex_amplitudes
+        complex_amplitudes = self.amp_model(extended_pitch / self.midi_norm)
+        complex_time = self.time_model(conditioning[..., 1:2])
+        return complex_amplitudes, complex_time

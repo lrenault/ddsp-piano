@@ -10,8 +10,8 @@ from ddsp.training import trainers, train_util, summaries
 from tensorflow.summary import create_file_writer, scalar
 
 from ddsp_piano.default_model import build_model  # , get_model
-# from ddsp_piano.jaes_exp_tanh import get_model
-from ddsp_piano.jaes_no_harm_norm import get_model
+from ddsp_piano.jaes_surrogate import get_model
+# from ddsp_piano.jaes_no_harm_norm import get_model
 from ddsp_piano.data_pipeline \
     import get_training_dataset, get_validation_dataset
 from ddsp_piano.utils.io_utils import collect_garbage

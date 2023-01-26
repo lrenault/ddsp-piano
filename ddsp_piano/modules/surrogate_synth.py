@@ -1,11 +1,12 @@
 import tensorflow as tf
 from ddsp import core, processors
-from ddsp_piano.modules.inharm_synth import get_inharmonic_freq
+from ddsp_piano.modules.inharm_synth import get_inharmonic_freq, cos_oscillator_bank
 
 
 def complex_harmonic_synthesis(frequencies,
                                amplitudes,
                                complex_amplitudes=None,
+                               complex_time=None,
                                harmonic_shifts=None,
                                harmonic_distribution=None,
                                upsampling=64,
@@ -67,26 +68,34 @@ def complex_harmonic_synthesis(frequencies,
                                         method=amp_resample_method)
     frequency_envelopes = core.resample(harmonic_frequencies, n_samples)
 
-    # Compute real exp decay of complex amplitudes
-    if complex_amplitudes is not None:
+    # Compute real exponential decay of complex amplitudes
+    if (complex_amplitudes is not None) and (complex_time is not None):
+        # Convert to float
         complex_amplitudes = core.tf_float32(complex_amplitudes)
+        complex_time = core.tf_float32(complex_time)
 
-        # TODO (lrenault): do not reset timestep count every upsampling rate as
-        # this introduces discontinuities. Use new module ala NoteReleaseCell.
-        complex_t = tf.range(upsampling, dtype=tf.float32)[tf.newaxis, ..., tf.newaxis]  # (1, upsampling, 1)
-        complex_t = tf.tile(complex_t, [batch_size, n_frames, n_harmonics])  # (batch, n_samples, n_harmonics)
-        complex_amp_env = tf.repeat(complex_amplitudes, upsampling, axis=1) # (batch, n_samples, n_harmonics)
+        # Upsampling frame rate to sample rate by repeating
+        complex_amp_env = tf.repeat(complex_amplitudes, upsampling, axis=1)
+        complex_sampletime = tf.repeat(complex_time, upsampling, axis=1) * upsampling
+
+        # Complete the sample-wise time count by incrementing
+        upsampling_range = tf.range(upsampling, dtype=tf.float32)
+        upsampling_range = tf.tile(upsampling_range[tf.newaxis, ..., tf.newaxis],
+                                   [batch_size, n_frames, n_harmonics])
+
+        complex_sampletime += upsampling_range
+        
         complex_amp_env = tf.math.pow(tf.math.sqrt(tf.math.square(complex_amp_env)),
-                                      complex_t)
+                                      complex_sampletime)
 
         # Multiply amplitudes deduced from complex with real amplitudes
         amplitude_envelopes *= complex_amp_env
 
     # Synthesize audio from harmonics (batch, n_samples)
-    audio = core.oscillator_bank(frequency_envelopes,
-                                 amplitude_envelopes,
-                                 sample_rate=sample_rate,
-                                 use_angular_cumsum=use_angular_cumsum)
+    audio = cos_oscillator_bank(frequency_envelopes,
+                                amplitude_envelopes,
+                                sample_rate=sample_rate,
+                                use_angular_cumsum=use_angular_cumsum)
     return audio
 
 
@@ -102,7 +111,7 @@ class SurrogateAdditive(processors.Processor):
                  frame_rate=250,
                  sample_rate=16000,
                  min_frequency=20,
-                 use_amplitude=True,
+                 normalize_harm_distribution=True,
                  scale_fn=core.exp_sigmoid,
                  normalize_below_nyquist=True,
                  inference=False,
@@ -111,7 +120,7 @@ class SurrogateAdditive(processors.Processor):
         self.frame_rate = frame_rate
         self.sample_rate = sample_rate
         self.min_frequency = min_frequency
-        self.use_amplitude = use_amplitude
+        self.normalize_harm_distribution = normalize_harm_distribution
         self.scale_fn = scale_fn
         self.normalize_below_nyquist = normalize_below_nyquist
         self.inference = inference
@@ -119,6 +128,7 @@ class SurrogateAdditive(processors.Processor):
     def get_controls(self,
                      amplitudes,
                      complex_amplitudes,
+                     complex_time,
                      harmonic_distribution,
                      inharm_coef,
                      f0_hz):
@@ -136,7 +146,7 @@ class SurrogateAdditive(processors.Processor):
         if self.scale_fn is not None:
             amplitudes = self.scale_fn(amplitudes)
             harmonic_distribution = self.scale_fn(harmonic_distribution)
-            complex_amplitudes = self.scale_fn(complex_amplitudes)
+            # complex_amplitudes = self.scale_fn(complex_amplitudes)
 
         n_harmonics = int(harmonic_distribution.shape[-1])
 
@@ -153,15 +163,15 @@ class SurrogateAdditive(processors.Processor):
             amplitudes *= core.tf_float32(tf.greater(f0_hz,
                                                      self.min_frequency))
         # Normalize
-        if self.use_amplitude:
-            harmonic_distribution /= tf.reduce_sum(harmonic_distribution,
-                                                   axis=-1,
-                                                   keepdims=True)
-        else:
-            amplitudes = tf.ones_like(amplitudes)
+        if self.normalize_harm_distribution:
+            harmonic_distribution = core.safe_divide(
+                harmonic_distribution,
+                tf.reduce_sum(harmonic_distribution, axis=-1, keepdims=True)
+            )
 
         return {'amplitudes': amplitudes,
                 'complex_amplitudes': complex_amplitudes,
+                'complex_time': complex_time,
                 'harmonic_distribution': harmonic_distribution,
                 'harmonic_shifts': harmonic_shifts,
                 'f0_hz': f0_hz}
@@ -169,6 +179,7 @@ class SurrogateAdditive(processors.Processor):
     def get_signal(self,
                    amplitudes,
                    complex_amplitudes,
+                   complex_time,
                    harmonic_distribution,
                    harmonic_shifts,
                    f0_hz):
@@ -176,6 +187,7 @@ class SurrogateAdditive(processors.Processor):
             frequencies=f0_hz,
             amplitudes=amplitudes,
             complex_amplitudes=complex_amplitudes,
+            complex_time=complex_time,
             harmonic_shifts=harmonic_shifts,
             harmonic_distribution=harmonic_distribution,
             upsampling=int(self.sample_rate / self.frame_rate),

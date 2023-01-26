@@ -9,9 +9,14 @@ from ddsp_piano.default_model import build_model
 tfkl = tf.keras.layers
 
 
-def offset_sigmoid(x, max_value=2.0, offset=1.0, threshold=1e-7):
+def positive_tanh(x):
     x = ddsp.core.tf_float32(x)
-    return max_value * tf.nn.sigmoid(x - offset) + threshold
+    return 0.5 * (tf.math.tanh(x) + 1.)
+
+
+def exp_tanh(x, max_value=2., exponent=10., gain=1., threshold=1e-7):
+    y = max_value * positive_tanh(gain * x) ** tf.math.log(exponent)
+    return y + threshold
 
 
 def build_polyphonic_processor_group(n_synths=16,
@@ -41,17 +46,19 @@ def build_polyphonic_processor_group(n_synths=16,
 
     # Init synthesizers
     noise = ddsp.synths.FilteredNoise(name='noise', n_samples=n_samples,
-                                      scale_fn=offset_sigmoid)
+                                      scale_fn=exp_tanh)
     additive = surrogate_synth.SurrogateAdditive(name='additive',
                                                  frame_rate=frame_rate,
                                                  sample_rate=sample_rate,
-                                                 scale_fn=offset_sigmoid,
-                                                 inference=inference)
+                                                 inference=inference,
+                                                 scale_fn=exp_tanh,
+                                                 normalize_harm_distribution=False)
     # DAG constructor
     dag = []
     dag.append((noise, ['magnitudes_0']))
     dag.append((additive, ['amplitudes_0',
                            'complex_amplitudes_0',
+                           'complex_time_0',
                            'harmonic_distribution_0',
                            'inharm_coef_0',
                            'f0_hz_0']))
@@ -63,6 +70,7 @@ def build_polyphonic_processor_group(n_synths=16,
         # Synthesize monophonic additive component
         dag.append((additive, [f'amplitudes_{i}',
                                f'complex_amplitudes_{i}',
+                               f'complex_time_{i}',
                                f'harmonic_distribution_{i}',
                                f'inharm_coef_{i}',
                                f'f0_hz_{i}']))
@@ -109,10 +117,11 @@ def get_model(inference=False,
                                                        'inharm_coef',
                                                        'amplitudes',
                                                        'complex_amplitudes',
+                                                       'complex_time',
                                                        'harmonic_distribution',
                                                        'magnitudes'))
     inharm_model = sub_modules.ParametricTuning()
-    complex_amp = sub_modules.SurrogateAmpModule()
+    surrogate_module = sub_modules.SurrogateModule()
     harmonic_masking = sub_modules.PartialMasking(n_partials=n_partials)
     reverb_model = sub_modules.MultiInstrumentReverb(
         n_instruments=n_piano_models,
@@ -150,7 +159,7 @@ def get_model(inference=False,
         parallelizer=parallelizer,
         monophonic_network=monophonic_network,
         inharm_model=inharm_model,
-        complex_amp=complex_amp,
+        surrogate_module=surrogate_module,
         # harmonic_masking=harmonic_masking,
         reverb_model=reverb_model,
         processor_group=processor_group,

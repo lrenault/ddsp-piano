@@ -15,6 +15,8 @@ class PianoModel(Model):
         merge and unmerge.
         - monophonic_network (nn.DictLayer): monophonic string model as
         neural network.
+        - surrogate_module (nn.DictLayer): compute complex amp modulus and time
+        for optimizng with the surrogate synthesis.
         - inharm_model (nn.DictLayer): inharmonicity model over tessitura.
         - detuner (nn.DictLayer): tuning model for pitch to absolute f0
         frequency.
@@ -30,7 +32,7 @@ class PianoModel(Model):
                  context_network=None,
                  parallelizer=None,
                  monophonic_network=None,
-                 complex_amp=None,
+                 surrogate_module=None,
                  inharm_model=None,
                  detuner=None,
                  harmonic_masking=None,
@@ -44,7 +46,7 @@ class PianoModel(Model):
         self.context_network = context_network
         self.parallelizer = parallelizer
         self.monophonic_network = monophonic_network
-        self.complex_amp = complex_amp
+        self.surrogate_module = surrogate_module
         self.inharm_model = inharm_model
         self.detuner = detuner
         self.harmonic_masking = harmonic_masking
@@ -72,7 +74,7 @@ class PianoModel(Model):
         # the first training phase strategy.
         for module in [self.inharm_model,
                        self.detuner,
-                       self.complex_amp]:
+                       self.surrogate_module]:
             if module is not None:
                 module.trainable = not first_phase
 
@@ -106,7 +108,7 @@ class PianoModel(Model):
                            self.inharm_model,
                            self.detuner,
                            self.monophonic_network,
-                           self.complex_amp,
+                           self.surrogate_module,
                            self.harmonic_masking]:
             if sub_module is not None:
                 features.update(sub_module(features, training=training))
