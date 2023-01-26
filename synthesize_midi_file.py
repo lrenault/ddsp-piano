@@ -4,7 +4,6 @@ import tensorflow as tf
 from soundfile import write
 from ddsp.training import trainers, train_util
 from ddsp_piano.default_model import build_model, get_model
-# from ddsp_piano.jaes_exp_tanh import get_model
 from ddsp_piano.utils.io_utils import load_midi_as_conditioning
 
 # Cannot put too long audio sequences on the GPU memory

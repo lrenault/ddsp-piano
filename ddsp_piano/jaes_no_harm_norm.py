@@ -51,7 +51,8 @@ def build_polyphonic_processor_group(n_synths=16,
                                             n_samples=n_samples,
                                             sample_rate=sample_rate,
                                             inference=inference,
-                                            scale_fn=exp_tanh)
+                                            scale_fn=exp_tanh,
+                                            normalize_harm_distribution=False)
     # DAG constructor
     dag = []
     dag.append((noise, ['magnitudes_0']))
@@ -121,16 +122,11 @@ def get_model(inference=False,
                 tfkl.GRU(64, return_sequences=True),
                 Normalize('layer')]
     )
-    original_layers = [tfkl.Dense(128, activation=tf.nn.leaky_relu),
-                       tfkl.GRU(192, return_sequences=True),
-                       tfkl.Dense(192, activation=tf.nn.leaky_relu),
-                       Normalize('layer')]
-    exp_tanh_layers = [tfkl.Dense(128, activation=tf.nn.leaky_relu),
-                       tfkl.GRU(192, return_sequences=True),
-                       tfkl.Dense(192, activation=tf.nn.leaky_relu)]
     monophonic_network = sub_modules.MonophonicNetwork(
         name='mono_net',
-        layers=exp_tanh_layers
+        layers=[tfkl.Dense(128, activation=tf.nn.leaky_relu),
+                tfkl.GRU(192, return_sequences=True),
+                tfkl.Dense(192, activation=tf.nn.leaky_relu)]
     )
     processor_group = build_polyphonic_processor_group(
         n_synths=n_synths,
@@ -155,10 +151,7 @@ def get_model(inference=False,
                                     mag_weight=1,
                                     logmag_weight=1,
                                     name='audio_stft_loss'),
-                losses.ReverbRegularizer(name='reverb_regularizer'),
-                # losses.LoudnessLoss(target_key=f"add_{n_synths - 1}",
-                #                     synth_key="reverb",
-                #                     name="reverb_loudness")
+                losses.ReverbRegularizer(name='reverb_regularizer')
                 ]
     )
     return model

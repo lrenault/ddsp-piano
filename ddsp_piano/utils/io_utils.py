@@ -10,8 +10,8 @@ from ddsp_piano.utils.midi_encoders import MIDIRoll2Conditioning
 seq_lib = note_seq.sequences_lib
 
 
-def decode_tfstring(tf_string):
-    return tf_string.numpy().decode('utf-8')
+def decode_tfstring(x):
+    return x.numpy().decode('utf-8') if tf.is_tensor(x) else x
 
 
 def tf_to_np(x):
