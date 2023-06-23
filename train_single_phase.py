@@ -1,21 +1,20 @@
 import os
+import socket
 import argparse
 import tensorflow as tf
 
-import manage_gpus as gpl
-
 from tqdm import tqdm
-from os.path import join
 from ddsp.training import trainers, train_util, summaries
 from tensorflow.summary import create_file_writer, scalar
 
 from ddsp_piano.default_model import build_model  # , get_model
-from ddsp_piano.jaes_surrogate import get_model
-# from ddsp_piano.jaes_no_harm_norm import get_model
+from ddsp_piano.jaes_exp_tanh import get_model
 from ddsp_piano.data_pipeline \
     import get_training_dataset, get_validation_dataset
 from ddsp_piano.utils.io_utils import collect_garbage
 from ddsp_piano.utils.summaries import inharm_summary, detune_summary
+
+osjoin = os.path.join
 
 
 def process_args():
@@ -26,7 +25,7 @@ def process_args():
                         help="Number of elements per batch.\
                         (default: %(default)s)")
 
-    parser.add_argument('--steps_per_epoch', '-s', type=int, default=16,
+    parser.add_argument('--steps_per_epoch', '-s', type=int, default=2048,
                         help="Number of steps of gradient descent per epoch.\
                         (default: %(default)s)")
 
@@ -42,7 +41,7 @@ def process_args():
                         inharmonicity sub-modules.\
                         (default: %(default)s)")
 
-    parser.add_argument('--restore', type=str, default=None,
+    parser.add_argument('--restore', '-r', type=str, default=None,
                         help="Restore training step from a saved folder.\
                         (default: %(default)s)")
 
@@ -60,6 +59,11 @@ def process_args():
 
 
 def lock_gpu(soft=True, gpu_device_id=-1):
+    if "ircam.fr" in socket.gethostname:
+        import manage_gpus as gpl
+    else:
+        return None
+
     try:
         id_locked = gpl.get_gpu_lock(gpu_device_id=gpu_device_id, soft=soft)
         print(f"Locked GPU {id_locked}")
@@ -122,13 +126,13 @@ def main(args):
         train_iterator = iter(training_dataset)
 
     # Inits before the training loop
-    exp_dir = join(args.exp_dir, f'phase_{args.phase}')
+    exp_dir = osjoin(args.exp_dir, f'phase_{args.phase}')
 
-    os.makedirs(join(exp_dir, "logs"), exist_ok=True)
-    os.makedirs(join(exp_dir, "last_iter"), exist_ok=True)
-    os.makedirs(join(exp_dir, "best_iter"), exist_ok=True)
+    os.makedirs(osjoin(exp_dir, "logs"), exist_ok=True)
+    os.makedirs(osjoin(exp_dir, "last_iter"), exist_ok=True)
+    os.makedirs(osjoin(exp_dir, "best_iter"), exist_ok=True)
 
-    summary_writer = create_file_writer(join(exp_dir, "logs"))
+    summary_writer = create_file_writer(osjoin(exp_dir, "logs"))
 
     # Training loop
     lowest_val_loss = 9999999.
@@ -161,12 +165,12 @@ def main(args):
                     detune_summary(model.inharm_model, step=step)
 
                 # Save model epoch before validation
-                trainer.save(join(exp_dir, "last_iter"))
+                trainer.save(osjoin(exp_dir, "last_iter"))
                 print('Last iteration model saved at',
-                      join(exp_dir, "last_iter"))
+                      osjoin(exp_dir, "last_iter"))
 
                 # Skip validation during early training
-                if trainer.step < 60000:
+                if trainer.step < 6 * args.steps_per_epoch:
                     # Just add an audio summary without computing the val loss
                     val_batch = next(iter(val_dataset))
                     summaries.audio_summary(
@@ -208,17 +212,17 @@ def main(args):
                 # Save if better epoch
                 if epoch_val_losses['audio_stft_loss'] < lowest_val_loss:
                     lowest_val_loss = epoch_val_losses['audio_stft_loss']
-                    trainer.save(join(exp_dir, "best_iter"))
+                    trainer.save(osjoin(exp_dir, "best_iter"))
 
                 # Collect garbage
                 collect_garbage()
 
     except tf.errors.InvalidArgumentError as e:
-        trainer.save(join(exp_dir, "crashed_iter"))
+        trainer.save(osjoin(exp_dir, "crashed_iter"))
         print(e)
 
     except KeyboardInterrupt:
-        trainer.save(join(exp_dir, "stopped_iter"))
+        trainer.save(osjoin(exp_dir, "stopped_iter"))
 
 
 if __name__ == '__main__':

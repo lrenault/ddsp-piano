@@ -1,5 +1,6 @@
 import tensorflow as tf
-from ddsp.core import tf_float32, resample, midi_to_hz
+from functools import partial
+from ddsp.core import tf_float32, resample, midi_to_hz, exp_sigmoid
 from ddsp.training import nn
 
 tfkl = tf.keras.layers
@@ -119,7 +120,7 @@ class MonophonicDeepNetwork(MonophonicNetwork):
         _conditioning = self.input_stacks[1](conditioning / [self.midi_norm, 1.])
         _context = self.input_stacks[2](context)
 
-        # Rnn RNN over the latents
+        # Run RNN over the latents
         x = tf.concat([_extended_pitch, _conditioning, _context], axis=-1)
         x = self.model(x)
         x = tf.concat([_extended_pitch, _conditioning, _context, x], axis=-1)
@@ -305,6 +306,31 @@ class InharmonicityNetwork(nn.DictLayer):
         return inharm_coef
 
 
+class DeepInharmonicity(nn.DictLayer):
+    """Partial inharmonicity estimation with a deep MLP.
+    Args:
+        - n_layers (int): number of hidden layers.
+        - ch (int): internal number of channels.
+    """
+    def __init__(self, ch=32, n_layers=4, name="inharmonicity_net", **kwargs):
+        super(DeepInharmonicity, self).__init__(**kwargs)
+        self.hidden_layers = nn.FcStack(ch, n_layers - 1)
+        self.scale_layer = tfkl.Dense(ch, activation=partial(core.exp_sigmoid, max_value=1.))
+        self.out_layer = tfkl.Dense(1, activation=lambda x: x / 1000.)
+
+        self.model = tf.keras.Sequential(layers=layers)
+
+    def call(self, extended_pitch, global_inharm=None) -> ['inharm_coef']:
+        inharm_coef = self.hidden_layers(extended_pitch / 128.)
+        inharm_coef = self.scale_layer(inharm_coef)
+        inharm_coef = self.out_layer(inharm_coef)
+
+        if global_inharm is not None:
+            inharm_coef += tf.nn.relu(global_inharm)
+
+        return inharm_coef
+
+
 class Detuner(nn.DictLayer):
     """ Compute a detuning factor for each input MIDI note.
     Args:
@@ -355,17 +381,17 @@ class DeepDetuner(nn.DictLayer):
         pitch to Hz.
     """
 
-    def __init__(self, n_substrings=2, use_detune=True, name='detuner', **kwargs):
+    def __init__(self, n_substrings=2, use_detune=True, ch=32, n_layers=3,
+                 name='detuner', **kwargs):
         super(DeepDetuner, self).__init__(name=name, **kwargs)
         self.n_substrings = n_substrings
         self.use_detune = use_detune
 
-        self.hidden_layers = nn.FcStack(ch=32, layers=3)
+        self.hidden_layers = nn.FcStack(ch=ch, layers=n_layers)
         self.out_layer = tfkl.Dense(self.n_substrings,
                                     activation='tanh',
                                     kernel_initializer='zeros',
-                                    bias_initializer='zeros',
-                                    trainable=False)
+                                    bias_initializer='zeros')
 
     def call(self, extended_pitch, global_detuning=None) -> ['f0_hz']:
         """ Forward pass
@@ -381,8 +407,7 @@ class DeepDetuner(nn.DictLayer):
             detuning = self.out_layer(self.hidden_layers(extended_pitch / 128.))
 
             if global_detuning is not None:
-                global_detuning = tf.math.tanh(global_detuning)
-                detuning += global_detuning
+                detuning += tf.math.tanh(global_detuning)
 
             extended_pitch += detuning
 
@@ -638,10 +663,11 @@ class PartialMasking(nn.DictLayer):
         super(PartialMasking, self).__init__(**kwargs)
         self.n_partials = n_partials
 
-    def call(self, harmonic_distribution) -> ['harmonic_distribution']:
-        batch = tf.shape(harmonic_distribution)[0]
-        n_frames = tf.shape(harmonic_distribution)[1]
-        n_harmonics = tf.shape(harmonic_distribution)[2]
+    def call(self, harmonic_distribution, n_partials=None) -> ['harmonic_distribution']:
+        if n_partials is None:
+            return harmonic_distribution
+
+        batch, n_frames, n_harmonics = tf.shape(harmonic_distribution)
 
         # Build the partial index
         partial_index = tf.range(n_harmonics)[tf.newaxis, tf.newaxis, ...]
@@ -649,7 +675,7 @@ class PartialMasking(nn.DictLayer):
 
         # Set higher partial amplitudes to zero
         harmonic_distribution = tf.where(
-            tf.less(partial_index, self.n_partials),
+            tf.less(partial_index, n_partials),
             harmonic_distribution,
             -10. * tf.ones_like(harmonic_distribution)
         )
@@ -686,26 +712,28 @@ class SurrogateModule(nn.DictLayer):
     (see B.Hayes - Sinusoidal Frequency using Gradient Descent).
     Args:
         - n_harmonics (int): number of partials for each monophonic note.
-        - n_layers (int): number of hidden Dense layers.
+    Inputs:
+        - conditioning (b, n_frames, n_synths, 2): active pitch and onset
+        velocity conditionings, for retrieving onset times.
+        - extended_pitch (b, n_frames, n_synths, 1): extended active pitch
+        conditioning.
     Returns:
         - complex_amplitudes (batch, n_frames, n_harmonics): per-harmonic
         complex amplitude modulus.
         - complex_timesteps (batch, n_frames, 1): time parametrization that
         resets at each new note onset.
     """
-    def __init__(self, n_harmonics=96, n_layers=3, **kwargs):
+    def __init__(self, n_harmonics=96, **kwargs):
         super(SurrogateModule, self).__init__(**kwargs)
         self.midi_norm = 128.
         self.n_harmonics = n_harmonics
-        layers = [tfkl.Dense(88, activation=tf.nn.leaky_relu) for _ in range(n_layers - 1)]
-        layers += [tfkl.Dense(n_harmonics, activation='relu',
-                              bias_initializer='ones',
-                              kernel_initializer='zeros'), ]
-        self.amp_model = tf.keras.Sequential(layers=layers)
+        self.amp_model = tfkl.Embedding(128,
+                                        self.n_harmonics,
+                                        embeddings_initializer='ones')
         self.time_model = tfkl.RNN(OnsetLinspaceCell(), return_sequences=True)
 
     def call(self, conditioning, extended_pitch) -> ['complex_amplitudes', 'complex_time']:
-        # Extended pitch (batch, n_frames, 16)
-        complex_amplitudes = self.amp_model(extended_pitch / self.midi_norm)
+        complex_amplitudes = self.amp_model(tf.cast(extended_pitch[..., 0],
+                                                    dtype=tf.int32))
         complex_time = self.time_model(conditioning[..., 1:2])
         return complex_amplitudes, complex_time

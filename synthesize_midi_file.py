@@ -3,7 +3,8 @@ import argparse
 import tensorflow as tf
 from soundfile import write
 from ddsp.training import trainers, train_util
-from ddsp_piano.default_model import build_model, get_model
+from ddsp_piano.default_model import build_model  # , get_model
+from ddsp_piano.jaes_exp_tanh import get_model
 from ddsp_piano.utils.io_utils import load_midi_as_conditioning
 
 # Cannot put too long audio sequences on the GPU memory
@@ -56,6 +57,9 @@ def main(args):
     # Save audio
     write(args.out_file,
           data=outputs['audio_synth'][0].numpy(),
+          samplerate=16000)
+    write(args.out_file + "_unreverbed.wav",
+          data=outputs['add_15']['signal'][0].numpy(),
           samplerate=16000)
     print(f"Audio saved at {args.out_file}.")
 

@@ -5,6 +5,7 @@ from ddsp.training.nn import Normalize
 from ddsp_piano.modules import PianoModel, sub_modules, inharm_synth, \
     surrogate_synth, losses
 from ddsp_piano.default_model import build_model
+from priv_ddfx.effects import AdvancedFilteredVelvetNoise
 
 tfkl = tf.keras.layers
 
@@ -52,6 +53,11 @@ def build_polyphonic_processor_group(n_synths=16,
                                             sample_rate=sample_rate,
                                             inference=inference,
                                             scale_fn=exp_tanh)
+    velvet_reverb = AdvancedFilteredVelvetNoise(sampling_rate=sample_rate,
+                                                ir_length=reverb_length,
+                                                freq_points=32000,
+                                                # early_rev_style="mult_firs",
+                                                trainable=True)
     # DAG constructor
     dag = []
     dag.append((noise, ['magnitudes_0']))
@@ -80,10 +86,12 @@ def build_polyphonic_processor_group(n_synths=16,
                      f'sub_add_{i}/signal']))
 
     # Reverb module
-    dag.append((ddsp.effects.Reverb(trainable=False,
-                                    reverb_length=reverb_length),
-                [f'add_{n_synths - 1}/signal',
-                 'reverb_ir']))
+    # dag.append((ddsp.effects.Reverb(trainable=False,
+    #                                 reverb_length=reverb_length),
+    #             [f'add_{n_synths - 1}/signal',
+    #              'reverb_ir']))
+    dag.append((velvet_reverb,
+                [f'add_{n_synths - 1}/signal', ]))
 
     # Compile dag into a processor group
     processor_group = ddsp.processors.ProcessorGroup(dag=dag, name=name)
@@ -95,7 +103,7 @@ def get_model(inference=False,
               duration=3,
               n_synths=16,
               n_substrings=1,
-              n_partials=2,
+              n_partials=None,
               n_piano_models=1,
               piano_embedding_dim=16,
               n_noise_filter_banks=64,
@@ -109,6 +117,8 @@ def get_model(inference=False,
     note_release = sub_modules.NoteRelease(frame_rate=frame_rate)
     parallelizer = sub_modules.Parallelizer(n_synths=n_synths)
     inharm_model = sub_modules.ParametricTuning()
+    surrogate_module = sub_modules.SurrogateModule()
+    harmonic_masking = sub_modules.PartialMasking(n_partials=n_partials)
     reverb_model = sub_modules.MultiInstrumentReverb(
         n_instruments=n_piano_models,
         reverb_length=int(reverb_duration * sample_rate)
@@ -149,13 +159,15 @@ def get_model(inference=False,
         parallelizer=parallelizer,
         monophonic_network=monophonic_network,
         inharm_model=inharm_model,
-        reverb_model=reverb_model,
+        # surrogate_module=surrogate_module,
+        # harmonic_masking=harmonic_masking,
+        reverb_model=None,  # reverb_model,
         processor_group=processor_group,
         losses=[losses.SpectralLoss(loss_type='L1',
                                     mag_weight=1,
                                     logmag_weight=1,
                                     name='audio_stft_loss'),
-                losses.ReverbRegularizer(name='reverb_regularizer'),
+                # losses.ReverbRegularizer(name='reverb_regularizer'),
                 # losses.LoudnessLoss(target_key=f"add_{n_synths - 1}",
                 #                     synth_key="reverb",
                 #                     name="reverb_loudness")

@@ -48,6 +48,22 @@ class ReverbRegularizer(Loss):
         return self.weight * loss
 
 
+class InharmonicityLoss(Loss):
+    """Reject negative inharmonicity values.
+    Params:
+        - weight (float): loss weight.
+    """
+    def __init__(self, weight=10., **kwargs):
+        super(InharmonicityLoss, self).__init__(**kwargs)
+        self.weight = weight
+
+    def call(self, outputs, *args, **kwargs):
+        inharm_coef = outputs["inharm_coef"]
+        loss = tf.reduce_sum(tf.math.maximum(-inharm_coef, 0.))
+        loss /= inharm_coef.shape[0]  # Divide by batch size
+        return self.weight * loss
+        
+
 class LoudnessLoss(SpectralLoss):
     """Loss comparing the loudness between two audio signals from two processor
     outputs.

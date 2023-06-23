@@ -38,6 +38,7 @@ class PianoModel(Model):
                  harmonic_masking=None,
                  reverb_model=None,
                  processor_group=None,
+                 ddsp_synths=None,
                  losses=None,
                  **kwargs):
         super(PianoModel, self).__init__(**kwargs)
@@ -52,6 +53,7 @@ class PianoModel(Model):
         self.harmonic_masking = harmonic_masking
         self.reverb_model = reverb_model
         self.processor_group = processor_group
+        self.ddsp_synths = ddsp_synths
 
         self.loss_objs = ddsp.core.make_iterable(losses)
 
@@ -92,6 +94,17 @@ class PianoModel(Model):
         if self.detuner is not None:
             self.detuner.use_detune = not first_phase
 
+    def all_trainable(self, trainable=True):
+        for module in [self.inharm_model,
+                       self.detuner,
+                       self.surrogate_module,
+                       self.note_release,
+                       self.context_network,
+                       self.monophonic_network,
+                       self.reverb_model]:
+            if module is not None:
+                module.trainable = trainable
+
     def compute_global_features(self, features, training):
         """Call all modules computing global features."""
         for sub_module in [self.z_encoder,
@@ -129,17 +142,24 @@ class PianoModel(Model):
         # Compute monophonic features
         features = self.compute_monophonic_features(features, training=training)
 
-        # Disentangle polyphony and batch axis
-        features = self.parallelizer(features, parallelize=False)
+        if self.ddsp_synths is None:
+            # Disentangle polyphony and batch axis
+            features = self.parallelizer(features, parallelize=False)
 
-        # Processor group call
-        pg_out = self.processor_group(features, return_outputs_dict=True)
+            # Processor group call
+            pg_out = self.processor_group(features, return_outputs_dict=True)
 
-        # Parse outputs
-        outputs = pg_out['controls']
-        outputs['audio_synth'] = pg_out['signal']
+            # Parse outputs
+            outputs = pg_out['controls']
+            outputs['audio_synth'] = pg_out['signal']
 
-        if training:
-            self._update_losses_dict(self.loss_objs, outputs)
+            if training:
+                self._update_losses_dict(self.loss_objs, outputs)
+
+        else:
+            features.update(self.ddsp_synths(features))
+            outputs = features
+            if training:
+                self._update_losses_dict(self.loss_objs, features)
 
         return outputs

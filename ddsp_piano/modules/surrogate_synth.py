@@ -51,7 +51,7 @@ def complex_harmonic_synthesis(frequencies,
     else:
         n_harmonics = 1
 
-    # Create harmonic frequencies (batch, n_frames, n_harmonics)
+    # Create (in-)harmonic frequencies (batch, n_frames, n_harmonics)
     harmonic_frequencies = core.get_harmonic_frequencies(frequencies,
                                                          n_harmonics)
     if harmonic_shifts is not None:
@@ -64,9 +64,9 @@ def complex_harmonic_synthesis(frequencies,
         harmonic_amplitudes = amplitudes
 
     # Upsample to audio rate
+    frequency_envelopes = core.resample(harmonic_frequencies, n_samples)
     amplitude_envelopes = core.resample(harmonic_amplitudes, n_samples,
                                         method=amp_resample_method)
-    frequency_envelopes = core.resample(harmonic_frequencies, n_samples)
 
     # Compute real exponential decay of complex amplitudes
     if (complex_amplitudes is not None) and (complex_time is not None):
@@ -146,20 +146,31 @@ class SurrogateAdditive(processors.Processor):
         if self.scale_fn is not None:
             amplitudes = self.scale_fn(amplitudes)
             harmonic_distribution = self.scale_fn(harmonic_distribution)
-            # complex_amplitudes = self.scale_fn(complex_amplitudes)
 
+        # Set inharmonicity to positive values
+        inharm_coef = tf.math.maximum(inharm_coef, 0.)
         n_harmonics = int(harmonic_distribution.shape[-1])
-
         inharmonic_freq, harmonic_shifts = get_inharmonic_freq(f0_hz,
                                                                inharm_coef,
                                                                n_harmonics)
+        # Clip complex amplitude to prevent explosion
+        if complex_amplitudes is not None:
+            complex_amplitudes = tf.math.minimum(complex_amplitudes, 1.)
+            complex_amplitudes = tf.math.maximum(complex_amplitudes, 1e-5)
+            # Clip above Nyquist
+            complex_amplitudes = tf.where(
+                tf.greater_equal(inharmonic_freq, self.sample_rate / 2.),
+                tf.ones_like(complex_amplitudes),
+                complex_amplitudes,
+            )
         if self.normalize_below_nyquist:
+            # Remove harmonics above Nyquist
             harmonic_distribution = core.remove_above_nyquist(
                 inharmonic_freq,
                 harmonic_distribution,
                 self.sample_rate
             )
-            # Set amplitude to zero if below hearable
+            # Set global amplitude to zero if below hearable
             amplitudes *= core.tf_float32(tf.greater(f0_hz,
                                                      self.min_frequency))
         # Normalize

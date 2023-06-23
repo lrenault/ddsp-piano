@@ -1,10 +1,10 @@
 import gc
+import pydub
 import note_seq
 import numpy as np
 import tensorflow as tf
 
 from pandas import read_csv
-from ddsp.training.data_preparation import prepare_tfrecord_lib as ddsp_lib
 from ddsp_piano.utils.midi_encoders import MIDIRoll2Conditioning
 
 seq_lib = note_seq.sequences_lib
@@ -44,6 +44,35 @@ def dataset_from_csv(csv_path, split=None, year=None, **kwargs):
     piano_models = np.sort(df['year'].unique())
 
     return dataset, n_samples, piano_models
+
+
+def load_audio_as_signal(audio_path, sample_rate=16000):
+    """Load audio file at specified sample rate and return an array.
+    In order to not use/install apache-beam, we've copied the function from
+    ddsp.training.data_preparation.prepare_tfrecord_lib._load_audio_as_array
+    Args:
+        audio_path: path to audio file
+        sample_rate: desired sample rate (can be different from original SR)
+    Returns:
+        audio: audio in np.float32
+    """
+    with tf.io.gfile.GFile(decode_tfstring(audio_path), 'rb') as f:
+        # Load audio at original SR
+        audio_segment = (pydub.AudioSegment.from_file(f).set_channels(1))
+        # Compute expected length at given `sample_rate`
+        expected_len = int(audio_segment.duration_seconds * sample_rate)
+        # Resample to `sample_rate`
+        audio_segment = audio_segment.set_frame_rate(sample_rate)
+        sample_arr = audio_segment.get_array_of_samples()
+        audio = np.array(sample_arr).astype(np.float32)
+        # Zero pad missing samples, if any
+        audio = pad_or_trim_to_expected_length(audio, expected_len)
+    # Convert from int to float representation.
+    audio /= np.iinfo(sample_arr.typecode).max
+    return audio
+
+    return ddsp_lib._load_audio_as_array((audio_path),
+                                         sample_rate)
 
 
 def load_midi_as_note_sequence(mid_path):
@@ -142,8 +171,7 @@ def load_data(audio_path,
         original piano roll.
     """
     # Read audio file
-    audio = ddsp_lib._load_audio_as_array(decode_tfstring(audio_path),
-                                          sample_rate)
+    audio = load_audio_as_signal(audio_path, sample_rate)
 
     # Read MIDI file
     note_sequence = load_midi_as_note_sequence(decode_tfstring(mid_path))
@@ -196,8 +224,10 @@ def split_sequence(x, segment_duration, rate, overlap=0.5):
     n_samples = int(segment_duration * rate)
     hop_size = int(n_samples * (1 - overlap))
 
-    timestep = 0
     segments = []
+    segments.append(ensure_sequence_length(x[:n_samples],
+                                           n_samples))
+    timestep = hop_size
     while timestep + n_samples < np.shape(x)[0]:
         segment = x[timestep: timestep + n_samples]
         segment = ensure_sequence_length(segment, n_samples)
@@ -205,7 +235,10 @@ def split_sequence(x, segment_duration, rate, overlap=0.5):
         segments.append(segment)
         timestep += hop_size
 
-    return np.stack(segments)
+    if len(segments) > 1:
+        return np.stack(segments)
+    else:
+        return np.array(segments)
 
 
 def collect_garbage():
