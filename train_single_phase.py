@@ -59,7 +59,7 @@ def process_args():
 
 
 def lock_gpu(soft=True, gpu_device_id=-1):
-    if "ircam.fr" in socket.gethostname:
+    if "ircam.fr" in socket.gethostname():
         import manage_gpus as gpl
     else:
         return None

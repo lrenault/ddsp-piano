@@ -5,6 +5,7 @@ import numpy as np
 import tensorflow as tf
 
 from pandas import read_csv
+from ddsp.spectral_ops import pad_or_trim_to_expected_length
 from ddsp_piano.utils.midi_encoders import MIDIRoll2Conditioning
 
 seq_lib = note_seq.sequences_lib
@@ -70,9 +71,6 @@ def load_audio_as_signal(audio_path, sample_rate=16000):
     # Convert from int to float representation.
     audio /= np.iinfo(sample_arr.typecode).max
     return audio
-
-    return ddsp_lib._load_audio_as_array((audio_path),
-                                         sample_rate)
 
 
 def load_midi_as_note_sequence(mid_path):
