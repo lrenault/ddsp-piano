@@ -36,6 +36,7 @@ class PianoModel(Model):
                  inharm_model=None,
                  detuner=None,
                  harmonic_masking=None,
+                 background_noise_model=None,
                  reverb_model=None,
                  processor_group=None,
                  ddsp_synths=None,
@@ -51,6 +52,7 @@ class PianoModel(Model):
         self.inharm_model = inharm_model
         self.detuner = detuner
         self.harmonic_masking = harmonic_masking
+        self.background_noise_model = background_noise_model
         self.reverb_model = reverb_model
         self.processor_group = processor_group
         self.ddsp_synths = ddsp_synths
@@ -60,6 +62,10 @@ class PianoModel(Model):
     @property
     def n_synths(self):
         return self.parallelizer.n_synths
+
+    @property
+    def sample_rate(self):
+        return self.processor_group.processors[0].sample_rate
 
     def _update_losses_dict(self, loss_objs, *args, **kwargs):
         super(PianoModel, self)._update_losses_dict(loss_objs,
@@ -85,6 +91,7 @@ class PianoModel(Model):
         # Modules not involved in freq computing have inversed trainability
         for module in [self.note_release,
                        self.context_network,
+                       self.background_noise_model,
                        self.monophonic_network,
                        self.reverb_model]:
             if module is not None:
@@ -109,6 +116,7 @@ class PianoModel(Model):
         """Call all modules computing global features."""
         for sub_module in [self.z_encoder,
                            self.context_network,
+                           self.background_noise_model,
                            self.reverb_model]:
             if sub_module is not None:
                 features.update(sub_module(features, training=training))

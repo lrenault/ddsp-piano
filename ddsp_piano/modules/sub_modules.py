@@ -6,6 +6,11 @@ from ddsp.training import nn
 tfkl = tf.keras.layers
 
 
+# -----------------------------------------------------------------------------
+# Global models
+# -----------------------------------------------------------------------------
+
+
 class ContextNetwork(nn.OutputSplitsLayer):
     """Sequential model for computing the context vector from the global inputs
     - Wrapped inside a DictLayer for named inputs compatibility.
@@ -53,6 +58,170 @@ class ContextNetwork(nn.OutputSplitsLayer):
                       axis=-1)
         x = self.model(x)
         return x
+
+
+class OneHotZEncoder(nn.DictLayer):
+    """ Transforms one-hot encoded instrument model into a Z embedding and
+    model-specific detuning and inharmonicity coefficient.
+    Args:
+        - n_instruments (int): number of instrument to be supported.
+        - z_dim (int): dimension of z embedding.
+        - n_frames (int): pool embedding value over this number of time frames.
+    """
+
+    def __init__(self, n_instruments=16, z_dim=16, n_frames=None, **kwargs):
+        super(OneHotZEncoder, self).__init__(**kwargs)
+        self.n_instruments = n_instruments
+        self.z_dim = z_dim
+        self.n_frames = n_frames
+
+        self.embedding = tfkl.Embedding(input_dim=self.n_instruments,
+                                        output_dim=self.z_dim,
+                                        input_length=1,
+                                        name='instrument_embedding')
+        self.inharm_embedding = tfkl.Embedding(input_dim=self.n_instruments,
+                                               output_dim=1,
+                                               input_length=1,
+                                               name='instr_specific_inharm')
+        self.detune_embedding = tfkl.Embedding(input_dim=self.n_instruments,
+                                               output_dim=1,
+                                               input_length=1,
+                                               name='instr_specific_detuning')
+
+    def alternate_training(self, first_phase=True):
+        """Toggle trainability of models according to the training phase.
+        (Modules involved with partial frequency computing are frozen during
+        the first training phase).
+        Args:
+            - first_phase (bool): whether training with the 1st phase strategy
+            or not.
+        """
+        self.embedding.trainable = first_phase
+        self.inharm_embedding.trainable = not first_phase
+        self.detune_embedding.trainable = not first_phase
+
+    def call(self, piano_model) -> ['z', 'global_inharm', 'global_detuning']:
+        # Fix piano_model to 0 for single piano modeling
+        if self.n_instruments == 1:
+            piano_model = tf.zeros_like(piano_model, dtype=tf.int32)
+
+        # Compute Z embedding from instrument id
+        z = self.embedding(piano_model)
+        global_inharm = self.inharm_embedding(piano_model)
+        global_detuning = self.detune_embedding(piano_model)
+
+        # Add time axis
+        if len(z.shape) == 2:
+            z = z[:, tf.newaxis, :]
+            global_inharm = global_inharm[:, tf.newaxis, :]
+            global_detuning = global_detuning[:, tf.newaxis, :]
+
+        if self.n_frames is not None:
+            # Expand time dim
+            z = resample(z, self.n_frames)
+            global_inharm = resample(global_inharm, self.n_frames)
+            global_detuning = resample(global_detuning, self.n_frames)
+
+        return z, global_inharm, global_detuning
+
+
+class BackgroundNoiseFilter(nn.DictLayer):
+    """Background noise modeler learning a constant noise filter."""
+    def __init__(self, n_instruments=16, n_filters=64, n_frames=None,
+                 denoise=False, **kwargs):
+        super().__init__(**kwargs)
+        self.n_instruments = n_instruments
+        self.n_filters = n_filters
+        self.n_frames = n_frames
+        self.denoise = denoise
+
+        self.embedding = tfkl.Embedding(input_dim=self.n_instruments,
+                                        output_dim=self.n_filters,
+                                        input_length=1,
+                                        name='background_filter_coefs')
+
+    def call(self, piano_model) -> ['background_mag']:
+        """Forward pass.
+        Args:
+            - piano_model (b): integer of the piano model/recording environment
+        """
+        background_mag = self.embedding(piano_model)  # (b, n_filters)
+
+        if len(background_mag.shape) == 2:
+            background_mag = background_mag[:, tf.newaxis, :]
+
+        if self.n_frames is not None:
+            # Expand time dim
+            background_mag = resample(background_mag, self.n_frames)
+
+        if self.denoise:
+            background_mag = -10. * tf.ones_like(background_mag)
+
+        return background_mag
+
+
+class MultiInstrumentReverb(nn.DictLayer):
+    """Reverb with learnable impulse response compatible with a multi-
+    environment setting.
+    Args:
+        - inference (bool): training or inference setting.
+        - n_instruments (int): number of instrument reverbs to model.
+        - reverb_length (int): number of samples for each impulse response.
+    """
+
+    def __init__(self,
+                 n_instruments=16,
+                 reverb_length=32000,
+                 inference=False,
+                 **kwargs):
+        super(MultiInstrumentReverb, self).__init__(**kwargs)
+        self.reverb_length = reverb_length
+        self.n_instruments = n_instruments
+        self.inference = inference
+
+    def build(self, input_shape):
+        self.reverb_dict = tf.keras.Sequential(layers=[
+            tf.keras.Input(batch_size=input_shape[0], shape=(1, )),
+            tfkl.Embedding(self.n_instruments,
+                           self.reverb_length,
+                           embeddings_initializer=tf.random_normal_initializer(
+                               mean=0,
+                               stddev=1e-6)
+                           )])
+        super(MultiInstrumentReverb, self).build(input_shape)
+
+    def exponential_decay_mask(self, ir, decay_exponent=4., decay_start=16000):
+        """ Apply exponential decay mask on impulse responde as in MIDI-ddsp
+        Args:
+            - ir (batch, n_samples): raw impulse response.
+        Returns:
+            - ir (batch, n_samples): decayed impulse response.
+        """
+        time = tf.linspace(0.0, 1.0, self.reverb_length - decay_start)
+        mask = tf.exp(- decay_exponent * time)
+        mask = tf.concat([tf.ones(decay_start), mask], 0)
+        return ir * mask[tf.newaxis, ...]
+
+    def call(self, piano_model) -> ['reverb_ir']:
+        """Get reverb IR from instrument id"""
+        if self.n_instruments == 1:
+            piano_model = tf.zeros_like(piano_model, dtype=tf.int32)
+
+        ir = self.reverb_dict(piano_model)
+
+        if len(ir.shape) == 3:
+            ir = ir[:, 0]
+
+        # Apply decay mask
+        if self.inference:
+            ir = self.exponential_decay_mask(ir)
+
+        return ir
+
+
+# -----------------------------------------------------------------------------
+# Monophonic amplitude models
+# -----------------------------------------------------------------------------
 
 
 class MonophonicNetwork(nn.OutputSplitsLayer):
@@ -214,6 +383,11 @@ class Parallelizer(tfkl.Layer):
             return self.unparallelize(features)
 
 
+# -----------------------------------------------------------------------------
+# Parametric tuning models
+# -----------------------------------------------------------------------------
+
+
 class InharmonicityNetwork(nn.DictLayer):
     """ Compute inharmonicity coefficient corresponding to MIDI notes. """
 
@@ -304,6 +478,69 @@ class InharmonicityNetwork(nn.DictLayer):
                                     axis=-1,
                                     keepdims=True)
         return inharm_coef
+
+
+class ParametricTuning(InharmonicityNetwork):
+    """Parametric model for piano tuning, for note inharmonicity and detuning
+    according to Rigaud et al. 'A parametric model of piano tuning' (DAFx-11)
+    Params:
+        - inharm_model (tfkl.Layer): parametric inharmonicity model over
+        tessitura.
+        - pitch_translation (float)
+        - decrease_slope (float)
+        - low_bass_asymptote (float)
+    Input:
+        - notes (batch, n_frames, 1): note conditioning (in MIDI scale).
+    Outputs:
+        - f0_hz (batch, n_frames, 1): (detuned) frequencies of notes (in Hz).
+        - inharm_coef (batch, n_frames, 1): inharmonicity coefficient.
+    """
+
+    def __init__(self, name='parametric_tuning', **kwargs):
+        super(ParametricTuning, self).__init__(name=name, **kwargs)
+
+        # Reference note
+        self.reference_a = tf.convert_to_tensor(69., dtype=tf.float32)
+
+        # Tuning parameters
+        self.pitch_translation = 64.  # m_0
+        self.decrease_slope = 24.  # alpha
+        self.low_bass_asymptote = 4.51 - 1  # K
+        self.erf = tf.math.tanh
+
+    def inharm_model(self, *args):
+        return super(ParametricTuning, self).call(*args)
+
+    def streching_model(self, notes):  # rho
+        rho = 1 - self.erf((notes - self.pitch_translation) / self.decrease_slope)
+        rho *= self.low_bass_asymptote / 2
+        rho += 1
+        return rho
+
+    def get_deviation_from_ET(self, notes, global_inharm=None):
+        # Get distance from reference note (A4)
+        reference_inharm_coef = self.inharm_model(self.reference_a, global_inharm)
+        ratio = midi_to_hz(notes) / midi_to_hz(self.reference_a)
+
+        # Compute deviation from equal temperament of octave A
+        detuning = 1 + reference_inharm_coef * (ratio * self.streching_model(notes))**2
+        detuning /= 1 + self.inharm_model(notes, global_inharm) * self.streching_model(notes)**2
+        detuning = tf.math.sqrt(detuning)
+
+        return detuning
+
+    def call(self, extended_pitch, global_inharm=None) -> ['f0_hz', 'inharm_coef']:
+        inharm_coef = self.inharm_model(extended_pitch, global_inharm)
+        detuning = self.get_deviation_from_ET(extended_pitch, global_inharm)
+
+        f0_hz = midi_to_hz(extended_pitch) * detuning
+
+        return f0_hz, inharm_coef
+
+
+# -----------------------------------------------------------------------------
+# Deep tuning models
+# -----------------------------------------------------------------------------
 
 
 class DeepInharmonicity(nn.DictLayer):
@@ -414,62 +651,115 @@ class DeepDetuner(nn.DictLayer):
         return midi_to_hz(extended_pitch)
 
 
-class ParametricTuning(InharmonicityNetwork):
-    """Parametric model for piano tuning, for note inharmonicity and detuning
-    according to Rigaud et al. 'A parametric model of piano tuning' (DAFx-11)
-    Params:
-        - inharm_model (tfkl.Layer): parametric inharmonicity model over
-        tessitura.
-        - pitch_translation (float)
-        - decrease_slope (float)
-        - low_bass_asymptote (float)
-    Input:
-        - notes (batch, n_frames, 1): note conditioning (in MIDI scale).
-    Outputs:
-        - f0_hz (batch, n_frames, 1): (detuned) frequencies of notes (in Hz).
-        - inharm_coef (batch, n_frames, 1): inharmonicity coefficient.
+# -----------------------------------------------------------------------------
+# Dictionnary tuning models
+# -----------------------------------------------------------------------------
+
+
+class DictDetuner(nn.DictLayer):
+    """Learn a detuning factor per pitch."""
+    def __init__(self, name="detuner", **kwargs):
+        super().__init__(name=name, **kwargs)
+        self.layer = tfkl.Embedding(128, 1,
+                                    embeddings_initializer='zeros',
+                                    name="detuner")
+
+    def call(self, extended_pitch, piano_model) -> ['f0_hz']:
+        """Forward pass.
+        Args:
+            - extended_pitch (b, n, 1): active pitch conditioning.
+        Returns:
+            - f0_hz (b, n, 1): fundamental frequencies (in Hz).
+        """
+        extended_pitch_int = tf.cast(extended_pitch[..., 0], dtype=tf.int32)
+        return midi_to_hz(extended_pitch + self.layer(extended_pitch_int))
+
+
+def l1_neg_reg(weight_matrix):
+    """Penalize negative values."""
+    return 1e2 * tf.math.reduce_sum(tf.nn.relu(-weight_matrix))
+
+
+class DictInharmonicityModel(nn.DictLayer):
+    """Learn a inharmonicity coefficient per pitch."""
+    def __init__(self, name="inharmonicity_net", **kwargs):
+        super().__init__(name=name, **kwargs)
+        self.layer = tfkl.Embedding(128, 1,
+                                    embeddings_initializer='zeros',
+                                    embeddings_regularizer=l1_neg_reg,
+                                    name="inharm_coefs")
+
+    def call(self, extended_pitch, piano_model) -> ['inharm_coef']:
+        """Forward pass.
+        Args:
+            - extended_pitch (b, n, 1): active pitch conditioning.
+        Returns:
+            - inharm_coef (b, n, 1): inharmonicity coefficient."""
+        extended_pitch = tf.cast(extended_pitch[..., 0], dtype=tf.int32)
+        return self.layer(extended_pitch)
+
+
+class OnsetLinspaceCell(tfkl.Layer):
+    """Custom RNN cell for counting the frames since the last note onset."""
+
+    def __init__(self, **kwargs):
+        super(OnsetLinspaceCell, self).__init__(**kwargs)
+        self.state_size = 1
+
+    @tf.function
+    def call(self, onset_velocity, previous_state):
+        """ Reset time if new note.
+        Args:
+            - onset_velocity (batch, 1): onset velocity MIDI vector frame.
+            - previous_state (batch, 1): previous time step.
+        """
+        previous_time_frame = previous_state[0]
+
+        new_note = tf_float32(tf.greater(onset_velocity, 0))
+        reset_time = 1 - new_note  # 1 if sustained, 0 if new note
+
+        surrogate_time_frame = reset_time * (previous_time_frame + 1)
+
+        return surrogate_time_frame, [surrogate_time_frame]
+
+
+class SurrogateModule(nn.DictLayer):
+    """Predict amplitude and compute time parametrization for the
+    surrogate synthesis with the complex synthesizer
+    (see B.Hayes - Sinusoidal Frequency using Gradient Descent).
+    TODO: support several piano models.
+    Args:
+        - n_harmonics (int): number of partials for each monophonic note.
+    Inputs:
+        - conditioning (b, n_frames, n_synths, 2): active pitch and onset
+        velocity conditionings, for retrieving onset times.
+        - extended_pitch (b, n_frames, n_synths, 1): extended active pitch
+        conditioning.
+    Returns:
+        - complex_amplitudes (batch, n_frames, n_harmonics): per-harmonic
+        complex amplitude modulus.
+        - complex_timesteps (batch, n_frames, 1): time parametrization that
+        resets at each new note onset.
     """
+    def __init__(self, n_harmonics=96, **kwargs):
+        super(SurrogateModule, self).__init__(**kwargs)
+        self.midi_norm = 128.
+        self.n_harmonics = n_harmonics
+        self.amp_model = tfkl.Embedding(128,
+                                        self.n_harmonics,
+                                        embeddings_initializer='ones')
+        self.time_model = tfkl.RNN(OnsetLinspaceCell(), return_sequences=True)
 
-    def __init__(self, name='parametric_tuning', **kwargs):
-        super(ParametricTuning, self).__init__(name=name, **kwargs)
+    def call(self, conditioning, extended_pitch) -> ['complex_amplitudes', 'complex_time']:
+        complex_amplitudes = self.amp_model(tf.cast(extended_pitch[..., 0],
+                                                    dtype=tf.int32))
+        complex_time = self.time_model(conditioning[..., 1:2])
+        return complex_amplitudes, complex_time
 
-        # Reference note
-        self.reference_a = tf.convert_to_tensor(69., dtype=tf.float32)
 
-        # Tuning parameters
-        self.pitch_translation = 64.  # m_0
-        self.decrease_slope = 24.  # alpha
-        self.low_bass_asymptote = 4.51 - 1  # K
-        self.erf = tf.math.tanh
-
-    def inharm_model(self, *args):
-        return super(ParametricTuning, self).call(*args)
-
-    def streching_model(self, notes):  # rho
-        rho = 1 - self.erf((notes - self.pitch_translation) / self.decrease_slope)
-        rho *= self.low_bass_asymptote / 2
-        rho += 1
-        return rho
-
-    def get_deviation_from_ET(self, notes, global_inharm=None):
-        # Get distance from reference note (A4)
-        reference_inharm_coef = self.inharm_model(self.reference_a, global_inharm)
-        ratio = midi_to_hz(notes) / midi_to_hz(self.reference_a)
-
-        # Compute deviation from equal temperament of octave A
-        detuning = 1 + reference_inharm_coef * (ratio * self.streching_model(notes))**2
-        detuning /= 1 + self.inharm_model(notes, global_inharm) * self.streching_model(notes)**2
-        detuning = tf.math.sqrt(detuning)
-
-        return detuning
-
-    def call(self, extended_pitch, global_inharm=None) -> ['f0_hz', 'inharm_coef']:
-        inharm_coef = self.inharm_model(extended_pitch, global_inharm)
-        detuning = self.get_deviation_from_ET(extended_pitch, global_inharm)
-
-        f0_hz = midi_to_hz(extended_pitch) * detuning
-
-        return f0_hz, inharm_coef
+# -----------------------------------------------------------------------------
+# Util models
+# -----------------------------------------------------------------------------
 
 
 class F0ProcessorCell(tfkl.Layer):
@@ -530,130 +820,6 @@ class NoteRelease(nn.DictLayer):
         return extended_pitch
 
 
-class OneHotZEncoder(nn.DictLayer):
-    """ Transforms one-hot encoded instrument model into a Z embedding and
-    model-specific detuning and inharmonicity coefficient.
-    Args:
-        - n_instruments (int): number of instrument to be supported.
-        - z_dim (int): dimension of z embedding.
-        - n_frames (int): pool embedding value over this number of time frames.
-    """
-
-    def __init__(self, n_instruments=16, z_dim=16, n_frames=None, **kwargs):
-        super(OneHotZEncoder, self).__init__(**kwargs)
-        self.n_instruments = n_instruments
-        self.z_dim = z_dim
-        self.n_frames = n_frames
-
-        self.embedding = tfkl.Embedding(input_dim=self.n_instruments,
-                                        output_dim=self.z_dim,
-                                        input_length=1,
-                                        name='instrument_embedding')
-        self.inharm_embedding = tfkl.Embedding(input_dim=self.n_instruments,
-                                               output_dim=1,
-                                               input_length=1,
-                                               name='instr_specific_inharm')
-        self.detune_embedding = tfkl.Embedding(input_dim=self.n_instruments,
-                                               output_dim=1,
-                                               input_length=1,
-                                               name='instr_specific_detuning')
-
-    def alternate_training(self, first_phase=True):
-        """Toggle trainability of models according to the training phase.
-        (Modules involved with partial frequency computing are frozen during
-        the first training phase).
-        Args:
-            - first_phase (bool): whether training with the 1st phase strategy
-            or not.
-        """
-        self.embedding.trainable = first_phase
-        self.inharm_embedding.trainable = not first_phase
-        self.detune_embedding.trainable = not first_phase
-
-    def call(self, piano_model) -> ['z', 'global_inharm', 'global_detuning']:
-        # Fix piano_model to 0 for single piano modeling
-        if self.n_instruments == 1:
-            piano_model = tf.zeros_like(piano_model, dtype=tf.int32)
-
-        # Compute Z embedding from instrument id
-        z = self.embedding(piano_model)
-        global_inharm = self.inharm_embedding(piano_model)
-        global_detuning = self.detune_embedding(piano_model)
-
-        # Add time axis
-        if len(z.shape) == 2:
-            z = z[:, tf.newaxis, :]
-            global_inharm = global_inharm[:, tf.newaxis, :]
-            global_detuning = global_detuning[:, tf.newaxis, :]
-
-        if self.n_frames is not None:
-            # Expand time dim
-            z = resample(z, self.n_frames)
-            global_inharm = resample(global_inharm, self.n_frames)
-            global_detuning = resample(global_detuning, self.n_frames)
-
-        return z, global_inharm, global_detuning
-
-
-class MultiInstrumentReverb(nn.DictLayer):
-    """Reverb with learnable impulse response compatible with a multi-
-    environment setting.
-    Args:
-        - inference (bool): training or inference setting.
-        - n_instruments (int): number of instrument reverbs to model.
-        - reverb_length (int): number of samples for each impulse response.
-    """
-
-    def __init__(self,
-                 n_instruments=16,
-                 reverb_length=32000,
-                 inference=False,
-                 **kwargs):
-        super(MultiInstrumentReverb, self).__init__(**kwargs)
-        self.reverb_length = reverb_length
-        self.n_instruments = n_instruments
-        self.inference = inference
-
-    def build(self, input_shape):
-        self.reverb_dict = tf.keras.Sequential(layers=[
-            tf.keras.Input(batch_size=input_shape[0], shape=(1, )),
-            tfkl.Embedding(self.n_instruments,
-                           self.reverb_length,
-                           embeddings_initializer=tf.random_normal_initializer(
-                               mean=0,
-                               stddev=1e-6)
-                           )])
-        super(MultiInstrumentReverb, self).build(input_shape)
-
-    def exponential_decay_mask(self, ir, decay_exponent=4., decay_start=16000):
-        """ Apply exponential decay mask on impulse responde as in MIDI-ddsp
-        Args:
-            - ir (batch, n_samples): raw impulse response.
-        Returns:
-            - ir (batch, n_samples): decayed impulse response.
-        """
-        time = tf.linspace(0.0, 1.0, self.reverb_length - decay_start)
-        mask = tf.exp(- decay_exponent * time)
-        mask = tf.concat([tf.ones(decay_start), mask], 0)
-        return ir * mask[tf.newaxis, ...]
-
-    def call(self, piano_model) -> ['reverb_ir']:
-        """Get reverb IR from instrument id"""
-        if self.n_instruments == 1:
-            piano_model = tf.zeros_like(piano_model, dtype=tf.int32)
-
-        ir = self.reverb_dict(piano_model)
-
-        if len(ir.shape) == 3:
-            ir = ir[:, 0]
-
-        # Apply decay mask
-        if self.inference:
-            ir = self.exponential_decay_mask(ir)
-
-        return ir
-
-
 class PartialMasking(nn.DictLayer):
     """Set amplitudes of partials above n_partials to zero.
     Args:
@@ -680,60 +846,3 @@ class PartialMasking(nn.DictLayer):
             -10. * tf.ones_like(harmonic_distribution)
         )
         return harmonic_distribution
-
-
-class OnsetLinspaceCell(tfkl.Layer):
-    """Custom RNN cell for counting the frames since the last note onset."""
-
-    def __init__(self, **kwargs):
-        super(OnsetLinspaceCell, self).__init__(**kwargs)
-        self.state_size = 1
-
-    @tf.function
-    def call(self, onset_velocity, previous_state):
-        """ Reset time if new note.
-        Args:
-            - onset_velocity (batch, 1): onset velocity MIDI vector frame.
-            - previous_state (batch, 1): previous time step.
-        """
-        previous_time_frame = previous_state[0]
-
-        new_note = tf_float32(tf.greater(onset_velocity, 0))
-        reset_time = 1 - new_note  # 1 if sustained, 0 if new note
-
-        surrogate_time_frame = reset_time * (previous_time_frame + 1)
-
-        return surrogate_time_frame, [surrogate_time_frame]
-
-
-class SurrogateModule(nn.DictLayer):
-    """Predict amplitude and compute time parametrization for the
-    surrogate synthesis with the complex synthesizer
-    (see B.Hayes - Sinusoidal Frequency using Gradient Descent).
-    Args:
-        - n_harmonics (int): number of partials for each monophonic note.
-    Inputs:
-        - conditioning (b, n_frames, n_synths, 2): active pitch and onset
-        velocity conditionings, for retrieving onset times.
-        - extended_pitch (b, n_frames, n_synths, 1): extended active pitch
-        conditioning.
-    Returns:
-        - complex_amplitudes (batch, n_frames, n_harmonics): per-harmonic
-        complex amplitude modulus.
-        - complex_timesteps (batch, n_frames, 1): time parametrization that
-        resets at each new note onset.
-    """
-    def __init__(self, n_harmonics=96, **kwargs):
-        super(SurrogateModule, self).__init__(**kwargs)
-        self.midi_norm = 128.
-        self.n_harmonics = n_harmonics
-        self.amp_model = tfkl.Embedding(128,
-                                        self.n_harmonics,
-                                        embeddings_initializer='ones')
-        self.time_model = tfkl.RNN(OnsetLinspaceCell(), return_sequences=True)
-
-    def call(self, conditioning, extended_pitch) -> ['complex_amplitudes', 'complex_time']:
-        complex_amplitudes = self.amp_model(tf.cast(extended_pitch[..., 0],
-                                                    dtype=tf.int32))
-        complex_time = self.time_model(conditioning[..., 1:2])
-        return complex_amplitudes, complex_time

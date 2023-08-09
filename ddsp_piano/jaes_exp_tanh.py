@@ -4,8 +4,9 @@ import tensorflow as tf
 from ddsp.training.nn import Normalize
 from ddsp_piano.modules import PianoModel, sub_modules, inharm_synth, \
     surrogate_synth, losses
+from ddsp_piano.modules.noisebandnet_synth import NoiseBandNetSynth
 from ddsp_piano.default_model import build_model
-from priv_ddfx.effects import AdvancedFilteredVelvetNoise
+from priv_ddfx.effects import AdvancedFilteredVelvetNoise, DelayNetwork
 
 tfkl = tf.keras.layers
 
@@ -31,7 +32,7 @@ def build_polyphonic_processor_group(n_synths=16,
     """ Polyphonic bank of additive + filtered noise synthesizers.
     Args:
         - n_synths (int): number of monophonic synthesizers.
-        - sample_rate (int): number of samples per second.
+        - sample_rate (int): number of audio samples per second.
         - duration (float): length of generated sample (in seconds).
         - reverb_length (float): length of the reverb impulse response.
         - inference (bool): synthesis for inference (slower but can handle
@@ -46,28 +47,35 @@ def build_polyphonic_processor_group(n_synths=16,
     reverb_length = int(reverb_duration * sample_rate)
 
     # Init synthesizers
-    noise = ddsp.synths.FilteredNoise(name='noise', n_samples=n_samples,
-                                      scale_fn=exp_tanh)
+    # noise = ddsp.synths.FilteredNoise(name='noise', n_samples=n_samples, scale_fn=exp_tanh)
+    noise = NoiseBandNetSynth(name='noise', sample_rate=sample_rate, scale_fn=exp_tanh)
     additive = inharm_synth.MultiInharmonic(name='additive',
                                             n_samples=n_samples,
                                             sample_rate=sample_rate,
                                             inference=inference,
                                             scale_fn=exp_tanh)
-    velvet_reverb = AdvancedFilteredVelvetNoise(sampling_rate=sample_rate,
-                                                ir_length=reverb_length,
-                                                freq_points=32000,
-                                                # early_rev_style="mult_firs",
-                                                trainable=True)
+    add = inharm_synth.MultiAdd(name='add')
+    # velvet_reverb = AdvancedFilteredVelvetNoise(sampling_rate=sample_rate,
+    #                                             ir_length=reverb_length,
+    #                                             freq_points=sample_rate * 2,
+    #                                             # early_rev_style="mult_firs",
+    #                                             trainable=True)
+    velvet_reverb = DelayNetwork(trainable=True,
+                                 freq_points=sample_rate * 2,
+                                 sampling_rate=sample_rate)
     # DAG constructor
     dag = []
-    dag.append((noise, ['magnitudes_0']))
     dag.append((additive, ['amplitudes_0',
                            'harmonic_distribution_0',
                            'inharm_coef_0',
                            'f0_hz_0']))
-    dag.append((ddsp.processors.Add(name='add_0'),
-                ['noise/signal',
-                 'additive/signal']))
+    dag.append((noise, ['magnitudes_0']))
+    dag.append((add, ['noise/signal', 'additive/signal']))
+
+    # Add global background noise
+    # dag.append((noise, ['background_mag']))
+    # dag.append((add, ['add/signal', 'noise/signal']))
+
     # Construct synth polyphony
     for i in range(1, n_synths):
         # Synthesize monophonic additive component
@@ -75,29 +83,24 @@ def build_polyphonic_processor_group(n_synths=16,
                                f'harmonic_distribution_{i}',
                                f'inharm_coef_{i}',
                                f'f0_hz_{i}']))
-        # Synthesize and add filtered noise component
+        # Synthesize noise component
         dag.append((noise, [f'magnitudes_{i}']))
-        dag.append((ddsp.processors.Add(name=f'sub_add_{i}'),
-                    ['noise/signal',
+        # Add to main signal chain
+        dag.append((add,
+                    ['add/signal',
+                     'noise/signal',
                      'additive/signal']))
-        # Add monophonic signal to the polyphonic signal
-        dag.append((ddsp.processors.Add(name=f'add_{i}'),
-                    [f'add_{i - 1}/signal',
-                     f'sub_add_{i}/signal']))
-
     # Reverb module
     # dag.append((ddsp.effects.Reverb(trainable=False,
-    #                                 reverb_length=reverb_length),
-    #             [f'add_{n_synths - 1}/signal',
-    #              'reverb_ir']))
-    dag.append((velvet_reverb,
-                [f'add_{n_synths - 1}/signal', ]))
+    #                                 reverb_length=reverb_length,
+    #                                 name="reverb"),
+    #             ['add/signal', 'reverb_ir']))
+    dag.append((velvet_reverb, ['add/signal']))
 
     # Compile dag into a processor group
     processor_group = ddsp.processors.ProcessorGroup(dag=dag, name=name)
 
     return processor_group
-
 
 def get_model(inference=False,
               duration=3,
@@ -106,7 +109,6 @@ def get_model(inference=False,
               n_partials=None,
               n_piano_models=1,
               piano_embedding_dim=16,
-              n_noise_filter_banks=64,
               frame_rate=250,
               sample_rate=16000,
               reverb_duration=1.5):
@@ -119,18 +121,20 @@ def get_model(inference=False,
     inharm_model = sub_modules.ParametricTuning()
     surrogate_module = sub_modules.SurrogateModule()
     harmonic_masking = sub_modules.PartialMasking(n_partials=n_partials)
+    background_noise_model = sub_modules.BackgroundNoiseFilter(
+        n_instruments=n_piano_models,
+        n_frames=int(duration * frame_rate),
+        denoise=inference)
     reverb_model = sub_modules.MultiInstrumentReverb(
         n_instruments=n_piano_models,
-        reverb_length=int(reverb_duration * sample_rate)
-    )
+        reverb_length=int(reverb_duration * sample_rate))
     # Neural modules
     context_network = sub_modules.ContextNetwork(
         name='context_net',
         normalize_pitch=True,
         layers=[tfkl.Dense(32, activation=tf.nn.leaky_relu),
                 tfkl.GRU(64, return_sequences=True),
-                Normalize('layer')]
-    )
+                Normalize('layer')])
     original_layers = [tfkl.Dense(128, activation=tf.nn.leaky_relu),
                        tfkl.GRU(192, return_sequences=True),
                        tfkl.Dense(192, activation=tf.nn.leaky_relu),
@@ -140,8 +144,11 @@ def get_model(inference=False,
                        tfkl.Dense(192, activation=tf.nn.leaky_relu)]
     monophonic_network = sub_modules.MonophonicNetwork(
         name='mono_net',
-        layers=exp_tanh_layers
-    )
+        layers=exp_tanh_layers,
+        output_splits=(('amplitudes', 1),
+                       ('harmonic_distribution', int(6 * sample_rate / 1000)),
+                       ('magnitudes', int(sample_rate / 250))))
+    # monophonic_network = sub_modules.MonophonicDeepNetwork(name='mono_net')
     processor_group = build_polyphonic_processor_group(
         n_synths=n_synths,
         n_piano_models=n_piano_models,
@@ -161,14 +168,15 @@ def get_model(inference=False,
         inharm_model=inharm_model,
         # surrogate_module=surrogate_module,
         # harmonic_masking=harmonic_masking,
-        reverb_model=None,  # reverb_model,
+        # background_noise_model=background_noise_model,
+        # reverb_model=reverb_model,
         processor_group=processor_group,
         losses=[losses.SpectralLoss(loss_type='L1',
                                     mag_weight=1,
                                     logmag_weight=1,
                                     name='audio_stft_loss'),
-                # losses.ReverbRegularizer(name='reverb_regularizer'),
-                # losses.LoudnessLoss(target_key=f"add_{n_synths - 1}",
+                # losses.ReverbRegularizer(name='reverb_regularizer', weight=0.005),
+                # losses.LoudnessLoss(target_key="add",
                 #                     synth_key="reverb",
                 #                     name="reverb_loudness")
                 ]

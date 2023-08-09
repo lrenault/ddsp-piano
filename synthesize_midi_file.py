@@ -7,9 +7,6 @@ from ddsp_piano.default_model import build_model  # , get_model
 from ddsp_piano.jaes_exp_tanh import get_model
 from ddsp_piano.utils.io_utils import load_midi_as_conditioning
 
-# Cannot put too long audio sequences on the GPU memory
-os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
-
 
 def process_args():
     parser = argparse.ArgumentParser()
@@ -43,26 +40,38 @@ def main(args):
         model = get_model(inference=True, duration=inputs['duration'])
         model = build_model(model,
                             batch_size=1,
-                            duration=inputs['duration'])
+                            duration=inputs['duration'],
+                            sample_rate=model.sample_rate)
         # Restore model weight
         print("Model built, now retrieving model weights...")
         trainer = trainers.Trainer(model, strategy=strategy)
         trainer.restore(args.ckpt)
 
     # Forward pass
-    print("Model retrieved with default weights. \
+    print(f"Model weights loaded from {args.ckpt} \
            \nNow synthesizing audio (this could take some time)...")
     outputs = model(inputs)
+
+    # background_noise = model.processor_group.processors[1](outputs['background_mag'])
+    # background_noise = model.processor_group.processors[-1](background_noise,
+    #                                                         outputs['reverb_ir'])
 
     # Save audio
     write(args.out_file,
           data=outputs['audio_synth'][0].numpy(),
-          samplerate=16000)
+          samplerate=model.sample_rate)
     write(args.out_file + "_unreverbed.wav",
-          data=outputs['add_15']['signal'][0].numpy(),
-          samplerate=16000)
+          # data=outputs['reverb']['controls']['audio'][0].numpy(),
+          data=outputs['add']['signal'][0].numpy(),
+          samplerate=model.sample_rate)
+    # write(args.out_file + "_background.wav",
+    #       data=background_noise[0].numpy(),
+    #       samplerate=16000)
     print(f"Audio saved at {args.out_file}.")
 
 
 if __name__ == "__main__":
+    # Cannot put too long audio sequences on the GPU memory
+    os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+
     main(process_args())

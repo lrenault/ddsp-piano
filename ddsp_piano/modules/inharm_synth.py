@@ -160,7 +160,8 @@ class InHarmonic(processors.Processor):
         Returns:
             - controls (Dict): dict of synthesizer controls
         """
-        # Scale the amplitudes
+        # Scale network outputs to positive values
+        inharm_coef = tf.math.maximum(inharm_coef, 0.)
         if self.scale_fn is not None:
             amplitudes = self.scale_fn(amplitudes)
             harmonic_distribution = self.scale_fn(harmonic_distribution)
@@ -264,3 +265,18 @@ class MultiInharmonic(InHarmonic):
                 f0_hz[..., substring: substring + 1]
             )
         return audio
+
+
+class MultiAdd(processors.Processor):
+    """Sum arbitrary number of signals."""
+    def __init__(self, name='add'):
+        super(MultiAdd, self).__init__(name=name)
+    
+    def get_controls(self, *signals):
+        controls = {}
+        for i, signal in enumerate(signals):
+            controls[f"signal_{i}"] = signal
+        return controls
+
+    def get_signal(self, **signals):
+        return sum(signals.values())

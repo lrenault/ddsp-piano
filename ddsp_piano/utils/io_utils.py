@@ -81,23 +81,6 @@ def load_midi_as_note_sequence(mid_path):
     return note_sequence
 
 
-def ensure_sequence_length(sequence, length):
-    """Zero-pad or crop sequence to fit desired length."""
-    original_length = sequence.shape[0]
-    # Return as is
-    if original_length == length:
-        return sequence
-    # Crop
-    elif original_length > length:
-        return sequence[:length]
-    # Pad
-    else:
-        pad_width = [(0, int(length - original_length))]
-        for _ in range(len(sequence.shape) - 1):
-            pad_width += [(0, 0)]
-        return np.pad(sequence, pad_width=pad_width)
-
-
 def load_midi_as_conditioning(mid_path,
                               n_synths=16,
                               frame_rate=250,
@@ -169,14 +152,14 @@ def load_data(audio_path,
         original piano roll.
     """
     # Read audio file
-    audio = load_audio_as_signal(audio_path, sample_rate)
+    audio = load_audio_as_signal(decode_tfstring(audio_path), tf_to_np(sample_rate))
 
     # Read MIDI file
     note_sequence = load_midi_as_note_sequence(decode_tfstring(mid_path))
 
     # Convert to pianoroll
     roll = seq_lib.sequence_to_pianoroll(note_sequence,
-                                         frames_per_second=frame_rate,
+                                         frames_per_second=tf_to_np(frame_rate),
                                          min_pitch=21,
                                          max_pitch=108)
     # Retrieve activity and onset velocities
@@ -196,17 +179,34 @@ def load_data(audio_path,
 
 
 @tf.function
-def load_data_tf(audio_path, mid_path, max_polyphony):
+def load_data_tf(audio_path, mid_path, max_polyphony, sample_rate, frame_rate):
     """tf.function wrapper for the load_and_split_data function."""
     audio, conditioning, pedal, polyphony = tf.py_function(
         load_data,
-        [audio_path, mid_path, max_polyphony],
+        [audio_path, mid_path, max_polyphony, sample_rate, frame_rate],
         Tout=(tf.float32, tf.float32, tf.float32, tf.int32)
     )
     return {"audio": audio,
             "conditioning": conditioning,
             "pedal": pedal,
             "polyphony": polyphony}
+
+
+def ensure_sequence_length(sequence, length):
+    """Zero-pad or crop sequence to fit desired length."""
+    original_length = sequence.shape[0]
+    # Return as is
+    if original_length == length:
+        return sequence
+    # Crop
+    elif original_length > length:
+        return sequence[:length]
+    # Pad
+    else:
+        pad_width = [(0, int(length - original_length))]
+        for _ in range(len(sequence.shape) - 1):
+            pad_width += [(0, 0)]
+        return np.pad(sequence, pad_width=pad_width)
 
 
 def split_sequence(x, segment_duration, rate, overlap=0.5):

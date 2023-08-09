@@ -21,11 +21,14 @@ def process_args():
     # Get arguments from command line
     parser = argparse.ArgumentParser()
 
+    parser.add_argument('--n_gpus', '-gpu', type=int, default=1,
+                        help="Number of GPUs to lock. (default: %(default)s)")
+
     parser.add_argument('--batch_size', '-b', type=int, default=6,
                         help="Number of elements per batch.\
                         (default: %(default)s)")
 
-    parser.add_argument('--steps_per_epoch', '-s', type=int, default=2048,
+    parser.add_argument('--steps_per_epoch', '-s', type=int, default=5000,
                         help="Number of steps of gradient descent per epoch.\
                         (default: %(default)s)")
 
@@ -88,7 +91,7 @@ def main(args):
         - maestro_path (path): maestro dataset location.
         - exp_dir (path): folder to store experiment results and logs.
     """
-    _ = lock_gpu()
+    _ = [lock_gpu() for _ in range(args.n_gpus)]
 
     # Format training phase strategy
     first_phase_strat = ((args.phase % 2) == 1)
@@ -96,9 +99,11 @@ def main(args):
     # Build/Load and put the model in the available strategy scope
     strategy = train_util.get_strategy()
     with strategy.scope():
-        model = build_model(get_model(),
-                            batch_size=args.batch_size,
-                            first_phase=first_phase_strat)
+        model = get_model()
+        model = build_model(model,
+                            batch_size=int(args.batch_size / max(args.n_gpus, 1)),
+                            first_phase=first_phase_strat,
+                            sample_rate=model.sample_rate)
         trainer = trainers.Trainer(model=model,
                                    strategy=strategy,
                                    learning_rate=args.lr)
@@ -114,10 +119,12 @@ def main(args):
 
     training_dataset = get_training_dataset(args.maestro_path,
                                             batch_size=args.batch_size,
-                                            max_polyphony=model.n_synths)
+                                            max_polyphony=model.n_synths,
+                                            sample_rate=model.sample_rate)
     val_dataset = get_validation_dataset(val_path,
                                          batch_size=args.batch_size,
-                                         max_polyphony=model.n_synths)
+                                         max_polyphony=model.n_synths,
+                                         sample_rate=model.sample_rate)
     # Dataset distribution
     with strategy.scope():
         training_dataset = trainer.distribute_dataset(training_dataset)
@@ -170,13 +177,13 @@ def main(args):
                       osjoin(exp_dir, "last_iter"))
 
                 # Skip validation during early training
-                if trainer.step < 6 * args.steps_per_epoch:
+                if trainer.step < 3 * args.steps_per_epoch:
                     # Just add an audio summary without computing the val loss
                     val_batch = next(iter(val_dataset))
                     summaries.audio_summary(
                         model(val_batch, training=True)["audio_synth"],
                         step,
-                        sample_rate=16000,
+                        sample_rate=model.sample_rate,
                         name='synthesized_audio')
                     collect_garbage()
                     continue
@@ -207,8 +214,11 @@ def main(args):
                            step=step)
                 summaries.audio_summary(val_outs_summary['audio_synth'],
                                         step,
-                                        sample_rate=16000,
+                                        sample_rate=model.sample_rate,
                                         name='synthesized_audio')
+                summaries.spectrogram_summary(val_outs_summary['audio'],
+                                              val_outs_summary['audio_synth'],
+                                              step=step)
                 # Save if better epoch
                 if epoch_val_losses['audio_stft_loss'] < lowest_val_loss:
                     lowest_val_loss = epoch_val_losses['audio_stft_loss']

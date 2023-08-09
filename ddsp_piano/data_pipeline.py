@@ -89,8 +89,9 @@ def get_preprocessed_dataset(dataset_dir,
     """
     # Init tf.dataset from .csv file
     dataset, n_examples, piano_models = io_utils.dataset_from_csv(
-        join(dataset_dir, "maestro-v3.0.0.csv"),
-        # join(dataset_dir, "maps_ISOL_NO-ST_ENSTDkCl.csv"),
+        # join(dataset_dir, "maestro-v3.0.0.csv"),
+        # join(dataset_dir, "maps_MUS_dataset.csv"),
+        join(dataset_dir, "mel2mel_MUS_dataset.csv"),
         split=split,
         year=year,
         **kwargs
@@ -110,7 +111,9 @@ def get_preprocessed_dataset(dataset_dir,
             **io_utils.load_data_tf(
                 tf.strings.join([dataset_dir, sample['audio_filename']]),
                 tf.strings.join([dataset_dir, sample['midi_filename']]),
-                max_polyphony)),
+                max_polyphony,
+                sample_rate,
+                frame_rate)),
         num_parallel_calls=num_parallel_calls
     )
     return dataset
