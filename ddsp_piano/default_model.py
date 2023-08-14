@@ -8,9 +8,12 @@ from ddsp_piano.modules.inharm_synth import MultiInharmonic
 
 tfkl = tf.keras.layers
 
+# ===========
+# This config script is deprecated in favor of gin-config files.
+# ===========
+
 
 def build_polyphonic_processor_group(n_synths=16,
-                                     n_piano_models=10,
                                      sample_rate=16000,
                                      duration=3,
                                      reverb_duration=None,
@@ -91,14 +94,17 @@ def get_model(inference=False,
     # Self-contained sub-modules
     z_encoder = sub_modules.OneHotZEncoder(n_instruments=n_piano_models,
                                            z_dim=piano_embedding_dim,
-                                           n_frames=int(duration * frame_rate))
+                                           frame_rate=frame_rate,
+                                           duration=duration)
     note_release = sub_modules.NoteRelease(frame_rate=frame_rate)
     parallelizer = sub_modules.Parallelizer(n_synths=n_synths)
     inharm_model = sub_modules.InharmonicityNetwork()
     detuner = sub_modules.Detuner(n_substrings=n_substrings)
     reverb_model = sub_modules.MultiInstrumentReverb(
         n_instruments=n_piano_models,
-        reverb_length=int(reverb_duration * sample_rate)
+        reverb_duration=reverb_duration,
+        sample_rate=sample_rate,
+        # reverb_length=int(reverb_duration * sample_rate)
     )
     # Neural modules
     context_network = sub_modules.ContextNetwork(
@@ -117,7 +123,6 @@ def get_model(inference=False,
 
     processor_group = build_polyphonic_processor_group(
         n_synths=n_synths,
-        n_piano_models=n_piano_models,
         sample_rate=sample_rate,
         duration=duration,
         reverb_duration=reverb_duration,

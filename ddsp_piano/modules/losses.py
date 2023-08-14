@@ -1,8 +1,10 @@
+import gin
 import tensorflow as tf
 
 from ddsp.losses import Loss, SpectralLoss
 
 
+@gin.register
 class SpectralLoss(SpectralLoss):
     """Generalized multi-resolution spectral loss by retrieving the audio
     output of a specific processor in the processor group.
@@ -30,6 +32,7 @@ class SpectralLoss(SpectralLoss):
                                               synthesized_audio)
 
 
+@gin.register
 class ReverbRegularizer(Loss):
     """Regularization loss on the reverb impulse response.
     Params:
@@ -48,6 +51,7 @@ class ReverbRegularizer(Loss):
         return self.weight * loss
 
 
+@gin.register
 class InharmonicityLoss(Loss):
     """Reject negative inharmonicity values.
     Params:
@@ -64,6 +68,7 @@ class InharmonicityLoss(Loss):
         return self.weight * loss
         
 
+@gin.register
 class LoudnessLoss(SpectralLoss):
     """Loss comparing the loudness between two audio signals from two processor
     outputs.

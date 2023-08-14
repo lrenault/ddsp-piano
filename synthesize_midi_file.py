@@ -1,15 +1,18 @@
 import os
 import argparse
+import gin
 import tensorflow as tf
 from soundfile import write
 from ddsp.training import trainers, train_util
-from ddsp_piano.default_model import build_model  # , get_model
-from ddsp_piano.jaes_exp_tanh import get_model
+from ddsp.training.models import get_model
+from ddsp_piano.data_pipeline import get_dummy_data
 from ddsp_piano.utils.io_utils import load_midi_as_conditioning
 
 
 def process_args():
     parser = argparse.ArgumentParser()
+    parser.add_argument('--config', '-c', type=str, help="A .gin model config",
+                        default='ddsp_piano/configs/default.gin')
     parser.add_argument('--ckpt', type=str, help="Model checkpoint to load.",
                         default='ddsp_piano/model_weights/ckpt-0')
     parser.add_argument('--piano_type', type=int, default=3,
@@ -32,19 +35,24 @@ def main(args):
     # Add piano model conditioning
     inputs['piano_model'] = tf.convert_to_tensor([[args.piano_type]])
 
-    # Model contruction
     print(f"Midi file loaded (with duration {inputs['duration']} s).\
             \nNow building the piano synthesizer...")
+
+    # Parse and override gin-config
+    gin.parse_config_file(args.config)
+    gin.bind_parameter('%inference', True)
+    gin.bind_parameter('%duration', inputs['duration'])
+
     strategy = train_util.get_strategy()
     with strategy.scope():
-        model = get_model(inference=True, duration=inputs['duration'])
-        model = build_model(model,
-                            batch_size=1,
-                            duration=inputs['duration'],
-                            sample_rate=model.sample_rate)
+        # Model contruction
+        model = get_model()
+        trainer = trainers.Trainer(model=model, strategy=strategy)
+        trainer.build(get_dummy_data(batch_size=1,
+                                     duration=inputs['duration'],
+                                     sample_rate=model.sample_rate))
         # Restore model weight
         print("Model built, now retrieving model weights...")
-        trainer = trainers.Trainer(model, strategy=strategy)
         trainer.restore(args.ckpt)
 
     # Forward pass

@@ -1,7 +1,9 @@
+import gin
 import tensorflow as tf
 from numpy import pi
 from ddsp import core
 from ddsp import processors
+from ddsp.synths import FilteredNoise
 
 
 def get_inharmonic_freq(f0_hz, inharm_coef, n_harmonics):
@@ -113,6 +115,7 @@ def harmonic_synthesis(frequencies,
     return audio
 
 
+@gin.register
 class InHarmonic(processors.Processor):
     """Synthesize audio with a bank of inharmonic sinusoidal oscillators.
     Args:
@@ -128,7 +131,7 @@ class InHarmonic(processors.Processor):
     """
 
     def __init__(self,
-                 n_samples=64000,
+                 frame_rate=250,
                  sample_rate=16000,
                  min_frequency=20,
                  scale_fn=core.exp_sigmoid,
@@ -136,7 +139,7 @@ class InHarmonic(processors.Processor):
                  normalize_below_nyquist=True,
                  inference=False,
                  name='inharmonic'):
-        self.n_samples = n_samples
+        self.frame_rate = frame_rate
         self.sample_rate = sample_rate
         self.min_frequency = min_frequency
         self.normalize_harm_distribution = normalize_harm_distribution
@@ -144,6 +147,10 @@ class InHarmonic(processors.Processor):
         self.normalize_below_nyquist = normalize_below_nyquist
         self.inference = inference
         super(InHarmonic, self).__init__(name=name)
+
+    @property
+    def upsampling(self):
+        return int(self.sample_rate / self.frame_rate)
 
     def get_controls(self,
                      amplitudes,
@@ -212,13 +219,14 @@ class InHarmonic(processors.Processor):
             amplitudes=amplitudes,
             harmonic_shifts=harmonic_shifts,
             harmonic_distribution=harmonic_distribution,
-            n_samples=self.n_samples,
+            n_samples=self.upsampling * f0_hz.shape[1],
             sample_rate=self.sample_rate,
             use_angular_cumsum=self.inference
         )
         return signal
 
 
+@gin.register
 class MultiInharmonic(InHarmonic):
     """Inharmonic synthesizer with multiple F0 controls."""
 
@@ -267,6 +275,37 @@ class MultiInharmonic(InHarmonic):
         return audio
 
 
+@gin.register
+class DynamicSizeFilteredNoise(FilteredNoise):
+    """White noise filtering synthesis with arbitrary output length controls."""
+    def __init__(self, frame_rate=250, sample_rate=16000, **kwargs):
+        super().__init__(**kwargs)
+        self.frame_rate = frame_rate
+        self.sample_rate = sample_rate
+
+    @property
+    def upsampling(self):
+        return int(self.sample_rate / self.frame_rate)
+
+    def get_signal(self, magnitudes):
+        """Synthesize audio with filtered white noise.
+        Args:
+          magnitudes: Magnitudes tensor of shape [batch, n_frames, n_filter_banks].
+            Expects float32 that is strictly positive.
+        Returns:
+          signal: A tensor of harmonic waves of shape [batch, n_samples, 1].
+        """
+        batch_size, n_frames, *axis = magnitudes.shape
+
+        n_samples = self.upsampling * n_frames
+
+        signal = tf.random.uniform([batch_size, n_samples],
+                                   minval=-1., maxval=1.)
+        return core.frequency_filter(signal, magnitudes,
+                                     window_size=self.window_size)
+
+
+@gin.register
 class MultiAdd(processors.Processor):
     """Sum arbitrary number of signals."""
     def __init__(self, name='add'):

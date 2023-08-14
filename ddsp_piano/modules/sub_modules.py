@@ -1,3 +1,4 @@
+import gin
 import tensorflow as tf
 from functools import partial
 from ddsp.core import tf_float32, resample, midi_to_hz, exp_sigmoid
@@ -11,6 +12,7 @@ tfkl = tf.keras.layers
 # -----------------------------------------------------------------------------
 
 
+@gin.register
 class ContextNetwork(nn.OutputSplitsLayer):
     """Sequential model for computing the context vector from the global inputs
     - Wrapped inside a DictLayer for named inputs compatibility.
@@ -60,20 +62,24 @@ class ContextNetwork(nn.OutputSplitsLayer):
         return x
 
 
+@gin.register
 class OneHotZEncoder(nn.DictLayer):
     """ Transforms one-hot encoded instrument model into a Z embedding and
     model-specific detuning and inharmonicity coefficient.
     Args:
         - n_instruments (int): number of instrument to be supported.
         - z_dim (int): dimension of z embedding.
-        - n_frames (int): pool embedding value over this number of time frames.
+        - duration (int): pool embedding value over this duration.
+        - frame_rate (int): number of controls per second.
     """
 
-    def __init__(self, n_instruments=16, z_dim=16, n_frames=None, **kwargs):
+    def __init__(self, n_instruments=16, z_dim=16, duration=None, frame_rate=250,
+                 **kwargs):
         super(OneHotZEncoder, self).__init__(**kwargs)
         self.n_instruments = n_instruments
         self.z_dim = z_dim
-        self.n_frames = n_frames
+        self.duration = duration
+        self.frame_rate = frame_rate
 
         self.embedding = tfkl.Embedding(input_dim=self.n_instruments,
                                         output_dim=self.z_dim,
@@ -87,6 +93,10 @@ class OneHotZEncoder(nn.DictLayer):
                                                output_dim=1,
                                                input_length=1,
                                                name='instr_specific_detuning')
+
+    @property
+    def n_frames(self):
+        return int(self.duration * self.frame_rate) if self.duration else 1
 
     def alternate_training(self, first_phase=True):
         """Toggle trainability of models according to the training phase.
@@ -116,15 +126,15 @@ class OneHotZEncoder(nn.DictLayer):
             global_inharm = global_inharm[:, tf.newaxis, :]
             global_detuning = global_detuning[:, tf.newaxis, :]
 
-        if self.n_frames is not None:
-            # Expand time dim
-            z = resample(z, self.n_frames)
-            global_inharm = resample(global_inharm, self.n_frames)
-            global_detuning = resample(global_detuning, self.n_frames)
+        # Expand time dim
+        z = resample(z, self.n_frames)
+        global_inharm = resample(global_inharm, self.n_frames)
+        global_detuning = resample(global_detuning, self.n_frames)
 
         return z, global_inharm, global_detuning
 
 
+@gin.register
 class BackgroundNoiseFilter(nn.DictLayer):
     """Background noise modeler learning a constant noise filter."""
     def __init__(self, n_instruments=16, n_filters=64, n_frames=None,
@@ -160,6 +170,7 @@ class BackgroundNoiseFilter(nn.DictLayer):
         return background_mag
 
 
+@gin.register
 class MultiInstrumentReverb(nn.DictLayer):
     """Reverb with learnable impulse response compatible with a multi-
     environment setting.
@@ -171,13 +182,19 @@ class MultiInstrumentReverb(nn.DictLayer):
 
     def __init__(self,
                  n_instruments=16,
-                 reverb_length=32000,
+                 reverb_duration=3,
+                 sample_rate=16000,
                  inference=False,
                  **kwargs):
         super(MultiInstrumentReverb, self).__init__(**kwargs)
-        self.reverb_length = reverb_length
+        self.reverb_duration = reverb_duration
+        self.sample_rate = sample_rate
         self.n_instruments = n_instruments
         self.inference = inference
+
+    @property
+    def reverb_length(self):
+        return int(self.reverb_duration * self.sample_rate)
 
     def build(self, input_shape):
         self.reverb_dict = tf.keras.Sequential(layers=[
@@ -224,6 +241,7 @@ class MultiInstrumentReverb(nn.DictLayer):
 # -----------------------------------------------------------------------------
 
 
+@gin.register
 class MonophonicNetwork(nn.OutputSplitsLayer):
     """Sequential model for computing monophonic synthesizer controls from the
     parallelized monophonic inputs. Wrapped inside a DictLayer for named inputs
@@ -268,6 +286,7 @@ class MonophonicNetwork(nn.OutputSplitsLayer):
         return x
 
 
+@gin.register
 class MonophonicDeepNetwork(MonophonicNetwork):
     """Monophonic network using the same architecture as the original DDSP
     decoder MLP layers."""
@@ -300,6 +319,7 @@ class MonophonicDeepNetwork(MonophonicNetwork):
         return x
 
 
+@gin.register
 class Parallelizer(tfkl.Layer):
     """Module for merging and unmerge the batch and polyphony axis of features.
     Args:
@@ -388,6 +408,7 @@ class Parallelizer(tfkl.Layer):
 # -----------------------------------------------------------------------------
 
 
+@gin.register
 class InharmonicityNetwork(nn.DictLayer):
     """ Compute inharmonicity coefficient corresponding to MIDI notes. """
 
@@ -480,6 +501,7 @@ class InharmonicityNetwork(nn.DictLayer):
         return inharm_coef
 
 
+@gin.register
 class ParametricTuning(InharmonicityNetwork):
     """Parametric model for piano tuning, for note inharmonicity and detuning
     according to Rigaud et al. 'A parametric model of piano tuning' (DAFx-11)
@@ -543,6 +565,7 @@ class ParametricTuning(InharmonicityNetwork):
 # -----------------------------------------------------------------------------
 
 
+@gin.register
 class DeepInharmonicity(nn.DictLayer):
     """Partial inharmonicity estimation with a deep MLP.
     Args:
@@ -568,6 +591,7 @@ class DeepInharmonicity(nn.DictLayer):
         return inharm_coef
 
 
+@gin.register
 class Detuner(nn.DictLayer):
     """ Compute a detuning factor for each input MIDI note.
     Args:
@@ -610,6 +634,7 @@ class Detuner(nn.DictLayer):
         return midi_to_hz(extended_pitch)
 
 
+@gin.register
 class DeepDetuner(nn.DictLayer):
     """ Compute a detuning factor for each input MIDI note.
     Args:
@@ -656,6 +681,7 @@ class DeepDetuner(nn.DictLayer):
 # -----------------------------------------------------------------------------
 
 
+@gin.register
 class DictDetuner(nn.DictLayer):
     """Learn a detuning factor per pitch."""
     def __init__(self, name="detuner", **kwargs):
@@ -680,6 +706,7 @@ def l1_neg_reg(weight_matrix):
     return 1e2 * tf.math.reduce_sum(tf.nn.relu(-weight_matrix))
 
 
+@gin.register
 class DictInharmonicityModel(nn.DictLayer):
     """Learn a inharmonicity coefficient per pitch."""
     def __init__(self, name="inharmonicity_net", **kwargs):
@@ -723,6 +750,7 @@ class OnsetLinspaceCell(tfkl.Layer):
         return surrogate_time_frame, [surrogate_time_frame]
 
 
+@gin.register
 class SurrogateModule(nn.DictLayer):
     """Predict amplitude and compute time parametrization for the
     surrogate synthesis with the complex synthesizer
@@ -762,6 +790,7 @@ class SurrogateModule(nn.DictLayer):
 # -----------------------------------------------------------------------------
 
 
+@gin.register
 class F0ProcessorCell(tfkl.Layer):
     """Custom RNN cell for extending MIDI note signals during a trainable
     release time.
@@ -804,6 +833,7 @@ class F0ProcessorCell(tfkl.Layer):
         return midi_note, [updated_state]
 
 
+@gin.register
 class NoteRelease(nn.DictLayer):
     """NoteRelease dict layer for extending the active pitch conditioning.
     Based on the custom RNN F0ProcessorCell"""
@@ -820,6 +850,7 @@ class NoteRelease(nn.DictLayer):
         return extended_pitch
 
 
+@gin.register
 class PartialMasking(nn.DictLayer):
     """Set amplitudes of partials above n_partials to zero.
     Args:

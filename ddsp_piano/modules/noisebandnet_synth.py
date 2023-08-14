@@ -161,10 +161,6 @@ class NoiseBandNetSynth(processors.Processor):
             magnitudes = self.scale_fn(magnitudes)
         return {'amplitudes': magnitudes}
 
-    def get_signal_inference(self, amplitudes):
-        # TODO
-        pass
-
     def get_signal(self, amplitudes):
         # Synth in noise_len frames to fit longer sequences on GPU memory
         frame_len = int(self.noise_len / self.upsampling)

@@ -1,16 +1,16 @@
 import os
+import gin
 import socket
 import argparse
 import tensorflow as tf
 
 from tqdm import tqdm
 from ddsp.training import trainers, train_util, summaries
+from ddsp.training.models import get_model
 from tensorflow.summary import create_file_writer, scalar
 
-from ddsp_piano.default_model import build_model  # , get_model
-from ddsp_piano.jaes_exp_tanh import get_model
 from ddsp_piano.data_pipeline \
-    import get_training_dataset, get_validation_dataset
+    import get_dummy_data, get_training_dataset, get_validation_dataset
 from ddsp_piano.utils.io_utils import collect_garbage
 from ddsp_piano.utils.summaries import inharm_summary, detune_summary
 
@@ -37,6 +37,10 @@ def process_args():
 
     parser.add_argument('--lr', type=float, default=0.001,
                         help="Learning rate. (default: %(default)s)")
+
+    parser.add_argument('--config', '-c',
+                        default='ddsp_piano/configs/default.gin',
+                        help="A .gin configuration file.")
 
     parser.add_argument('--phase', '-p', type=int, default=1,
                         help="Training phase strategy to apply. \
@@ -97,16 +101,18 @@ def main(args):
     first_phase_strat = ((args.phase % 2) == 1)
 
     # Build/Load and put the model in the available strategy scope
+    gin.parse_config_file(args.config)
     strategy = train_util.get_strategy()
     with strategy.scope():
         model = get_model()
-        model = build_model(model,
-                            batch_size=int(args.batch_size / max(args.n_gpus, 1)),
-                            first_phase=first_phase_strat,
-                            sample_rate=model.sample_rate)
+        model.alternate_training(first_phase=first_phase_strat)
+
         trainer = trainers.Trainer(model=model,
                                    strategy=strategy,
                                    learning_rate=args.lr)
+        trainer.build(batch=get_dummy_data(
+            batch_size=int(args.batch_size / max(args.n_gpus, 1)),
+            sample_rate=model.sample_rate))
         # Restore model and optimizer states
         if args.restore is not None:
             trainer.restore(args.restore)

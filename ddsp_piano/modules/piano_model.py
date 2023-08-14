@@ -1,9 +1,11 @@
+import gin
 import tensorflow as tf
 import ddsp
 
 from ddsp.training.models.model import Model
 
 
+@gin.configurable
 class PianoModel(Model):
     """DDSP model for piano synthesis from MIDI conditioning.
     Args:
@@ -61,7 +63,7 @@ class PianoModel(Model):
 
     @property
     def n_synths(self):
-        return self.parallelizer.n_synths
+        return self.parallelizer.n_synths if self.parallelizer else 1
 
     @property
     def sample_rate(self):

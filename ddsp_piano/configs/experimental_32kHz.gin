@@ -1,0 +1,17 @@
+import gin.tf.external_configurables
+import ddsp
+import ddsp_piano
+
+# ======
+# Macros
+# ======
+n_instruments = 1
+n_synths = 16
+
+frame_rate = 250
+sample_rate = 32000
+
+duration = 3
+reverb_duration = 1.5
+
+inference = False
