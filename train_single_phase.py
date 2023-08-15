@@ -110,9 +110,15 @@ def main(args):
         trainer = trainers.Trainer(model=model,
                                    strategy=strategy,
                                    learning_rate=args.lr)
-        trainer.build(batch=get_dummy_data(
-            batch_size=int(args.batch_size / max(args.n_gpus, 1)),
-            sample_rate=model.sample_rate))
+        # Model building
+        _ = trainer.run(
+            tf.function(trainer.model.__call__),
+            get_dummy_data(batch_size=args.batch_size, # int(args.batch_size / max(args.n_gpus, 1)),
+                           sample_rate=model.sample_rate),
+            training=True,
+            return_losses=True,
+        )
+        trainer.model.summary()
         # Restore model and optimizer states
         if args.restore is not None:
             trainer.restore(args.restore)

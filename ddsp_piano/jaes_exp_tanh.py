@@ -115,7 +115,8 @@ def get_model(inference=False,
     # Self-contained sub-modules
     z_encoder = sub_modules.OneHotZEncoder(n_instruments=n_piano_models,
                                            z_dim=piano_embedding_dim,
-                                           n_frames=int(duration * frame_rate))
+                                           duration=duration,
+                                           frame_rate=frame_rate)
     note_release = sub_modules.NoteRelease(frame_rate=frame_rate)
     parallelizer = sub_modules.Parallelizer(n_synths=n_synths)
     inharm_model = sub_modules.ParametricTuning()
@@ -127,7 +128,8 @@ def get_model(inference=False,
         denoise=inference)
     reverb_model = sub_modules.MultiInstrumentReverb(
         n_instruments=n_piano_models,
-        reverb_length=int(reverb_duration * sample_rate))
+        reverb_duration=reverb_duration,
+        sample_rate=sample_rate)
     # Neural modules
     context_network = sub_modules.ContextNetwork(
         name='context_net',

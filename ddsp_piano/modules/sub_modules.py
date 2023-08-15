@@ -137,18 +137,23 @@ class OneHotZEncoder(nn.DictLayer):
 @gin.register
 class BackgroundNoiseFilter(nn.DictLayer):
     """Background noise modeler learning a constant noise filter."""
-    def __init__(self, n_instruments=16, n_filters=64, n_frames=None,
-                 denoise=False, **kwargs):
+    def __init__(self, n_instruments=16, n_filters=64,
+                 duration=None, frame_rate=250, denoise=False, **kwargs):
         super().__init__(**kwargs)
         self.n_instruments = n_instruments
         self.n_filters = n_filters
-        self.n_frames = n_frames
+        self.duration = duration
+        self.frame_rate = frame_rate
         self.denoise = denoise
 
         self.embedding = tfkl.Embedding(input_dim=self.n_instruments,
                                         output_dim=self.n_filters,
                                         input_length=1,
                                         name='background_filter_coefs')
+
+    @property
+    def n_frames(self):
+        return int(self.duration * self.frame_rate) if self.duration else 1
 
     def call(self, piano_model) -> ['background_mag']:
         """Forward pass.
@@ -160,9 +165,8 @@ class BackgroundNoiseFilter(nn.DictLayer):
         if len(background_mag.shape) == 2:
             background_mag = background_mag[:, tf.newaxis, :]
 
-        if self.n_frames is not None:
-            # Expand time dim
-            background_mag = resample(background_mag, self.n_frames)
+        # Expand time dim
+        background_mag = resample(background_mag, self.n_frames)
 
         if self.denoise:
             background_mag = -10. * tf.ones_like(background_mag)
@@ -683,20 +687,25 @@ class DeepDetuner(nn.DictLayer):
 
 @gin.register
 class DictDetuner(nn.DictLayer):
-    """Learn a detuning factor per pitch."""
-    def __init__(self, name="detuner", **kwargs):
+    """Learn a detuning factor per pitch.
+    Args:
+        - n_instruments (int): number of multiple instrument model to handle.
+    """
+    def __init__(self, name="detuner", n_instruments=1, **kwargs):
         super().__init__(name=name, **kwargs)
-        self.layer = tfkl.Embedding(128, 1,
+        self.layer = tfkl.Embedding(128 * n_instruments,
+                                    1,
                                     embeddings_initializer='zeros',
                                     name="detuner")
 
-    def call(self, extended_pitch, piano_model) -> ['f0_hz']:
+    def call(self, extended_pitch, piano_model=None) -> ['f0_hz']:
         """Forward pass.
         Args:
             - extended_pitch (b, n, 1): active pitch conditioning.
         Returns:
             - f0_hz (b, n, 1): fundamental frequencies (in Hz).
         """
+        # TODO: handle multiple instruments
         extended_pitch_int = tf.cast(extended_pitch[..., 0], dtype=tf.int32)
         return midi_to_hz(extended_pitch + self.layer(extended_pitch_int))
 
@@ -708,20 +717,26 @@ def l1_neg_reg(weight_matrix):
 
 @gin.register
 class DictInharmonicityModel(nn.DictLayer):
-    """Learn a inharmonicity coefficient per pitch."""
-    def __init__(self, name="inharmonicity_net", **kwargs):
+    """Learn a inharmonicity coefficient per pitch.
+    Args:
+        - n_instruments (int): number of multiple instrument model to handle.
+    """
+    def __init__(self, name="inharmonicity_net", n_instruments=1, **kwargs):
         super().__init__(name=name, **kwargs)
-        self.layer = tfkl.Embedding(128, 1,
+        self.layer = tfkl.Embedding(128 * n_instruments,
+                                    1,
                                     embeddings_initializer='zeros',
                                     embeddings_regularizer=l1_neg_reg,
                                     name="inharm_coefs")
 
-    def call(self, extended_pitch, piano_model) -> ['inharm_coef']:
+    def call(self, extended_pitch, piano_model=None) -> ['inharm_coef']:
         """Forward pass.
         Args:
             - extended_pitch (b, n, 1): active pitch conditioning.
         Returns:
-            - inharm_coef (b, n, 1): inharmonicity coefficient."""
+            - inharm_coef (b, n, 1): inharmonicity coefficient.
+        """
+        # TODO: handle multiple instruments
         extended_pitch = tf.cast(extended_pitch[..., 0], dtype=tf.int32)
         return self.layer(extended_pitch)
 

@@ -4,6 +4,21 @@ from numpy import pi
 from ddsp import core
 from ddsp import processors
 from ddsp.synths import FilteredNoise
+from priv_ddfx.effects import DelayNetwork
+
+gin.external_configurable(DelayNetwork)
+
+
+def positive_tanh(x):
+    x = core.tf_float32(x)
+    return 0.5 * (tf.math.tanh(x) + 1.)
+
+
+@gin.register
+def exp_tanh(x, max_value=2., exponent=10., gain=1., threshold=1e-7):
+    # A varation of the exp_sigmoid function with tanh as it saturates faster
+    y = max_value * positive_tanh(gain * x) ** tf.math.log(exponent)
+    return y + threshold
 
 
 def get_inharmonic_freq(f0_hz, inharm_coef, n_harmonics):
