@@ -88,7 +88,8 @@ class PianoModel(Model):
             if module is not None:
                 module.trainable = not first_phase
 
-        self.z_encoder.alternate_training(first_phase)
+        if self.z_encoder is not None:
+            self.z_encoder.alternate_training(first_phase)
 
         # Modules not involved in freq computing have inversed trainability
         for module in [self.note_release,

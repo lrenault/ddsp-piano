@@ -6,6 +6,8 @@ from ddsp import processors
 from ddsp.synths import FilteredNoise
 from priv_ddfx.effects import DelayNetwork
 
+# Register Differentiable Feedback Delay Reverb from priv-ddfx
+# (TODO): provide link to priv-ddfx repo
 gin.external_configurable(DelayNetwork)
 
 
@@ -29,13 +31,10 @@ def get_inharmonic_freq(f0_hz, inharm_coef, n_harmonics):
         - inharm_coef (batch, :, 1): inharmonicity coefficients.
         - n_harmonics (int): number of harmonics.
     Returns:
-        - inharmonic_freq (batch, :, n_harmonics): oscillators
-        frequencies in Hz.
+        - inharmonic_freq (batch, :, n_harmonics): oscillators frequencies (Hz)
         - harmonic_shifts (batch, :, n_harmonics): deviation from pure integer
         factor harmonicity.
     """
-    f0_hz = core.tf_float32(f0_hz)
-
     # Integer ratios
     int_multiplier = tf.linspace(1.0, float(n_harmonics), int(n_harmonics))
     int_multiplier = int_multiplier[tf.newaxis, tf.newaxis, :]
@@ -58,9 +57,16 @@ def cos_oscillator_bank(frequency_envelopes,
                         sample_rate=16000,
                         sum_sinusoids=True,
                         use_angular_cumsum=False):
-    frequency_envelopes = core.tf_float32(frequency_envelopes)
-    amplitude_envelopes = core.tf_float32(amplitude_envelopes)
-
+    """Bank of additive cosine oscillators. Contrary to sinuses, harmonic
+    cosinuses are synchronized at peaks.
+    Args:
+        - frequency_envelopes (b, n_samples, n_sins): oscillators frequencies
+        - amplitude_envelopes (b, n_samples, n_sins): oscillators amplitudes
+        - sample_rate (int)
+        - sum_sinusoids (bool): reduce sum all oscillators signals.
+        - use_angular_cumsum (book): enables chunk-wise cumsum to avoid ac-
+        cumulationn errors.
+    """
     # Don't exceed Nyquist.
     amplitude_envelopes = core.remove_above_nyquist(frequency_envelopes,
                                                     amplitude_envelopes,
@@ -78,9 +84,9 @@ def cos_oscillator_bank(frequency_envelopes,
 
     # Convert to waveforms.
     wavs = tf.cos(phases)
-    audio = amplitude_envelopes * wavs  # [mb, n_samples, n_sinusoids]
+    audio = amplitude_envelopes * wavs  # [b, n_samples, n_sinusoids]
     if sum_sinusoids:
-        audio = tf.reduce_sum(audio, axis=-1)  # [mb, n_samples]
+        audio = tf.reduce_sum(audio, axis=-1)  # [b, n_samples]
     return audio
 
 
@@ -99,11 +105,8 @@ def harmonic_synthesis(frequencies,
     if harmonic_distribution is not None:
         harmonic_distribution = core.tf_float32(harmonic_distribution)
         n_harmonics = int(harmonic_distribution.shape[-1])
-    elif harmonic_shifts is not None:
-        harmonic_shifts = core.tf_float32(harmonic_shifts)
-        n_harmonics = int(harmonic_shifts.shape[-1])
     else:
-        n_harmonics = 1
+        n_harmonics = 1 if harmonic_distribution is None else 
 
     # Create harmonic frequencies [batch_size, n_frames, n_harmonics].
     harmonic_frequencies = core.get_harmonic_frequencies(frequencies, n_harmonics)
@@ -138,7 +141,7 @@ class InHarmonic(processors.Processor):
         - sample_rate (int): sample per second.
         - min_frequency (int): minimum supported frequency (in Hz).
         - scale_fn (fn): scaling function for network outputs post-processing.
-        - normalize_harm_distribution (bool): whether to force the sum of
+        - normalize_after_nyquist_cut (bool): whether to force the sum of
         partial energy to 1.
         - normalize_below_nyquist (bool): set amplitude of frequencies abow
         Nyquist to 0.
@@ -150,14 +153,14 @@ class InHarmonic(processors.Processor):
                  sample_rate=16000,
                  min_frequency=20,
                  scale_fn=core.exp_sigmoid,
-                 normalize_harm_distribution=True,
+                 normalize_after_nyquist_cut=True,
                  normalize_below_nyquist=True,
                  inference=False,
                  name='inharmonic'):
         self.frame_rate = frame_rate
         self.sample_rate = sample_rate
         self.min_frequency = min_frequency
-        self.normalize_harm_distribution = normalize_harm_distribution
+        self.normalize_after_nyquist_cut = normalize_after_nyquist_cut
         self.scale_fn = scale_fn
         self.normalize_below_nyquist = normalize_below_nyquist
         self.inference = inference
@@ -190,9 +193,15 @@ class InHarmonic(processors.Processor):
 
         n_harmonics = int(harmonic_distribution.shape[-1])
 
-        inharmonic_freq, harmonic_shifts = get_inharmonic_freq(
-            f0_hz, inharm_coef, n_harmonics
-        )
+        inharmonic_freq, harmonic_shifts = get_inharmonic_freq(f0_hz,
+                                                               inharm_coef,
+                                                               n_harmonics)
+        # Normalize harmonic distribution before Nyquist cut
+        if not self.normalize_after_nyquist_cut:
+            harmonic_distribution = core.safe_divide(
+                harmonic_distribution,
+                tf.reduce_sum(harmonic_distribution, axis=-1, keepdims=True)
+            )
         # Bandlimit the harmonic distribution
         if self.normalize_below_nyquist:
             harmonic_distribution = core.remove_above_nyquist(
@@ -203,8 +212,8 @@ class InHarmonic(processors.Processor):
             # Set amplitude to zero if below hearable
             amplitudes *= core.tf_float32(tf.greater(f0_hz,
                                                      self.min_frequency))
-        # Normalize
-        if self.normalize_harm_distribution:
+        # Normalize harmonic distribution after Nyquist cut
+        if self.normalize_after_nyquist_cut:
             harmonic_distribution = core.safe_divide(
                 harmonic_distribution,
                 tf.reduce_sum(harmonic_distribution, axis=-1, keepdims=True)

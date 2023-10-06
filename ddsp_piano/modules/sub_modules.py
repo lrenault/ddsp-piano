@@ -63,6 +63,29 @@ class ContextNetwork(nn.OutputSplitsLayer):
 
 
 @gin.register
+class SimpleContextNet(nn.OutputSplitsLayer):
+    """Context network that does not """
+    def __init__(self, layers, output_splits=(('context', 32),), **kwargs):
+        super().__init__(output_splits=output_splits, **kwargs)
+        self.model = tf.keras.Sequential(layers=layers)
+
+    def compute_output(self, pedal, z=None):
+        """Forward pass.
+        Args:
+            - pedal (batch, n_frames, 4): pedal conditioning.
+            - z (batch, 1, z_dim): instrument embedding.
+        """
+        context = self.model(pedal)
+
+        # Appky instrument embedding as a FiLM layer
+        if z is not None:
+            film_coef, film_bias = tf.split(z, 2, axis=-1)
+            context = context * film_coef + film_bias
+
+        return context
+
+
+@gin.register
 class OneHotZEncoder(nn.DictLayer):
     """ Transforms one-hot encoded instrument model into a Z embedding and
     model-specific detuning and inharmonicity coefficient.
@@ -126,7 +149,7 @@ class OneHotZEncoder(nn.DictLayer):
             global_inharm = global_inharm[:, tf.newaxis, :]
             global_detuning = global_detuning[:, tf.newaxis, :]
 
-        # Expand time dim
+        # Pool over time dimension
         z = resample(z, self.n_frames)
         global_inharm = resample(global_inharm, self.n_frames)
         global_detuning = resample(global_detuning, self.n_frames)

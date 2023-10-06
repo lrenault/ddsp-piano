@@ -1,7 +1,8 @@
 """
-Tensorflow-DDSP adaptation of https://github.com/adrianbarahona/noisebandnet/tree/master/noisebandnet
+Tensorflow-DDSP adaptation of
+https://github.com/adrianbarahona/noisebandnet/tree/master/noisebandnet
 """
-
+import gin
 import math
 import numpy as np
 import tensorflow as tf
@@ -113,6 +114,7 @@ class FilterBank(tfkl.Layer):
         return filters
 
 
+@gin.register
 class NoiseBandNetSynth(processors.Processor):
     """Tensorflow-DDSP adaptation of the synth_batch part of
     https://github.com/adrianbarahona/noisebandnet/blob/master/noisebandnet/model.py

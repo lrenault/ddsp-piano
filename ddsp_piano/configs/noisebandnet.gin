@@ -1,0 +1,106 @@
+import gin.tf.external_configurables
+import ddsp
+import ddsp_piano
+import rwkv_tf
+
+# ======
+# Macros
+# ======
+n_instruments = 1
+n_synths = 16
+
+frame_rate = 250
+sample_rate = 16000
+
+duration = 3
+reverb_duration = 1.5
+
+inference = False
+
+
+# =====
+# Model
+# =====
+get_model.model = @piano_model.PianoModel()
+
+
+# ===========
+# Sub-modules
+# ===========
+
+# Z-Encoder
+PianoModel.z_encoder = @sub_modules.OneHotZEncoder()
+OneHotZEncoder:
+    z_dim = 16
+    n_instruments = %n_instruments
+    duration = %duration
+    frame_rate = %frame_rate
+
+# Context Network
+PianoModel.context_network = @sub_modules.ContextNetwork()
+ContextNetwork:
+    name = 'context_net'
+    normalize_pitch = True
+    output_splits = (('magnitudes', 800), )
+    # layers = [@context_net/dense_1/layers.Dense(),
+    #           @context_net/layers.GRU(),
+    #           @context_net/nn.Normalize(),
+    #           @context_net/dense_2/layers.Dense(),
+    #           @context_net/dense_3/layers.Dense()]
+    layers = [@rwkv_tf.RWKV_MODEL_Attention.RWKV(), ]
+rwkv_tf.RWKV_MODEL_Attention.RWKV:
+    parallel_mode = True
+    model_config = {"num_layers": 4,
+                    "hidden_size": 512,
+                    "vocabulary_size": 52,  # 2 * 16 + 4 + 16
+                    "attention_layers": [False, True, True, False]}
+# context_net/dense_1/layers.Dense:
+#     units = 1024
+#     activation = @tf.nn.leaky_relu
+# context_net/layers.GRU:
+#     units = 1024
+#     return_sequences = True
+# context_net/dense_2/layers.Dense:
+#     units = 1024
+#     activation = @tf.nn.leaky_relu
+# context_net/dense_3/layers.Dense:
+#     units = 512
+#     activation = @tf.nn.leaky_relu
+
+# Parallelizer
+PianoModel.parallelizer = @sub_modules.Parallelizer()
+sub_modules.Parallelizer:
+    n_synths = %n_synths
+    global_keys = []
+    mono_keys = []
+
+# ===========
+# DDSP layers
+# ===========
+PianoModel.processor_group = @processors.ProcessorGroup()
+ProcessorGroup.dag = [
+    (@noisebandnet_synth.NoiseBandNetSynth(),
+     ['magnitudes']),
+    # (@priv_ddfx.effects.DelayNetwork(),
+    #  ['noise/signal']),
+]
+
+noisebandnet_synth.NoiseBandNetSynth:
+    name = 'noise'
+    sample_rate = %sample_rate
+# priv_ddfx.effects.DelayNetwork:
+#     trainable = True
+#     freq_points = 32000
+#     delay_lines = 8
+#     sampling_rate = %sample_rate
+
+
+# ======
+# Losses
+# ======
+PianoModel.losses = [@ddsp_piano.modules.losses.SpectralLoss(),]
+ddsp_piano.modules.losses.SpectralLoss:
+    loss_type = 'L1'
+    mag_weight = 1.0
+    logmag_weight = 1.0
+    name = 'audio_stft_loss'

@@ -367,6 +367,15 @@ def save_dataset(dataset, filename):
 
 
 def preprocess_data_into_tfrecord(filename, **kwargs):
-    """Parse through a maestro dataset and save preprocessing as tfrecord"""
+    """Parse through a maestro dataset and save preprocessing as a .tfrecord
+    Typical usage would be:
+    ```
+    preprocess_data_into_tfrecord(
+        </export/path>,
+        dataset_dir=<path/to/base_dataset>,
+        split='train',
+        ...
+    )
+    ``` """
     dataset = get_preprocessed_dataset(**kwargs)
     save_dataset(dataset, filename)

@@ -21,6 +21,8 @@ def process_args():
     parser.add_argument('--duration', '-d', type=float, default=None,
                         help="Maximum duration of synthesized audio.\
                               (default: %(default)s)")
+    parser.add_argument('--unreverbed', '-u', action='store_false',
+                        help="Generate unreverbed audio.")
     parser.add_argument('midi_file', type=str,
                         help="Piano MIDI file to synthesize.")
     parser.add_argument('out_file', type=str,
@@ -60,21 +62,17 @@ def main(args):
            \nNow synthesizing audio (this could take some time)...")
     outputs = model(inputs)
 
-    # background_noise = model.processor_group.processors[1](outputs['background_mag'])
-    # background_noise = model.processor_group.processors[-1](background_noise,
-    #                                                         outputs['reverb_ir'])
-
-    # Save audio
+    # Save final audio
     write(args.out_file,
           data=outputs['audio_synth'][0].numpy(),
           samplerate=model.sample_rate)
-    write(args.out_file + "_unreverbed.wav",
-          # data=outputs['reverb']['controls']['audio'][0].numpy(),
-          data=outputs['add']['signal'][0].numpy(),
-          samplerate=model.sample_rate)
-    # write(args.out_file + "_background.wav",
-    #       data=background_noise[0].numpy(),
-    #       samplerate=16000)
+
+    # Save dry audio (optional)
+    if args.unreverbed:
+        write(args.out_file + "_unreverbed.wav",
+              data=outputs['add']['signal'][0].numpy(),
+              samplerate=model.sample_rate)
+
     print(f"Audio saved at {args.out_file}.")
 
 
