@@ -263,6 +263,99 @@ class MultiInstrumentReverb(nn.DictLayer):
         return ir
 
 
+@gin.register
+class MultiInstrumentFeedbackDelayReverb(nn.DictLayer):
+    """Feedback-delay reverb parameters in a multi-environment setting.
+    Args:
+        - inference (bool): training or inference setting.
+        - n_instruments (int): number of instrument reverbs to model.
+        - reverb_length (int): number of samples for each impulse response.
+    """
+    def __init__(self, n_instruments=10, sample_rate=16000, delay_lines=8,
+                 early_ir_length=200,
+                 **kwargs):
+        super().__init__(**kwargs)
+        from priv_ddfx.effects import DelayNetwork
+
+        self.n_instruments = n_instruments
+        self.sample_rate = sample_rate
+        self.delay_lines = delay_lines
+
+        general_initializer = tf.random_normal_initializer(mean=0., stddev=1e-1)
+        delay_initializer = tf.random_normal_initializer(mean=400., stddev=60.)
+        gains_initializer = tf.random_normal_initializer(mean=0.25, stddev=1e-1)
+
+        self._input_gain = tfkl.Embedding(
+            self.n_instruments, self.delay_lines,
+            embeddings_initializer=gains_initializer
+        )
+        self._output_gain = tfkl.Embedding(
+            self.n_instruments, self.delay_lines,
+            embeddings_initializer=gains_initializer
+        )
+        self._gain_allpass = tfkl.Embedding(
+            self.n_instruments, 4 * self.delay_lines,
+            embeddings_initializer=gains_initializer
+        )
+        self._delays_allpass = tfkl.Embedding(
+            self.n_instruments, 4 * self.delay_lines,
+            embeddings_initializer=delay_initializer
+        )
+        self._time_rev_0_sec = tfkl.Embedding(
+            self.n_instruments, 1,
+            embeddings_initializer=tf.random_normal_initializer(mean=2., stddev=5e-1),
+            embeddings_constraint=tf.keras.constraints.NonNeg()
+        )
+        self._alpha_tone = tfkl.Embedding(
+            self.n_instruments, 1,
+            embeddings_initializer=general_initializer
+        )
+        self._early_ir = tfkl.Embedding(
+            self.n_instruments, early_ir_length,
+            embeddings_initializer=general_initializer
+        )
+        self.reverb_model = DelayNetwork(trainable=False,
+                                         freq_points=self.sample_rate * 2,
+                                         sampling_rate=self.sample_rate)
+
+    def build(self, input_shape):
+        self.reverb_model.build(input_shape)
+        super().build(input_shape)
+
+    def reshape_embedding(self, embedding, splits=4):
+        splitted = tf.split(embedding, splits, axis=-1)
+        return tf.stack(splitted, axis=-1)
+
+    def call(self, piano_model, training=False) -> ['reverb_ir']:
+        if self.n_instruments == 1:
+            piano_model = tf.zeros_like(piano_model, dtype=tf.int32)
+        piano_model = piano_model[..., 0]
+        batch_size = piano_model.shape[0]
+        
+        early_ir = self._early_ir(piano_model, training=training)
+        input_gain = self._input_gain(piano_model, training=training)
+        output_gain = self._output_gain(piano_model, training=training)
+        gain_allpass = self.reshape_embedding(self._gain_allpass(piano_model, training=training))
+        delays_allpass = self.reshape_embedding(self._delays_allpass(piano_model, training=training))
+        time_rev_0_sec = self._time_rev_0_sec(piano_model, training=training)
+        alpha_tone = tf.math.sigmoid(self._alpha_tone(piano_model, training=training))
+
+        ir = tf.TensorArray(tf.float32, size=batch_size)
+        for b in tf.range(batch_size):
+            ir.write(b, self.reverb_model.get_ir(
+                **self.reverb_model.get_controls(
+                    audio_dry=None,
+                    early_ir=early_ir[b],
+                    input_gain=input_gain[b],
+                    output_gain=output_gain[b],
+                    gain_allpass=gain_allpass[b],
+                    delays_allpass=delays_allpass[b],
+                    time_rev_0_sec=time_rev_0_sec[b],
+                    alpha_tone=alpha_tone[b],
+                )))
+        return ir.stack()
+
+
 # -----------------------------------------------------------------------------
 # Monophonic amplitude models
 # -----------------------------------------------------------------------------

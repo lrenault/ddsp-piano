@@ -106,7 +106,7 @@ def harmonic_synthesis(frequencies,
         harmonic_distribution = core.tf_float32(harmonic_distribution)
         n_harmonics = int(harmonic_distribution.shape[-1])
     else:
-        n_harmonics = 1 if harmonic_distribution is None else 
+        n_harmonics = 1
 
     # Create harmonic frequencies [batch_size, n_frames, n_harmonics].
     harmonic_frequencies = core.get_harmonic_frequencies(frequencies, n_harmonics)

@@ -52,10 +52,10 @@ PianoModel.detuner = @sub_modules.Detuner()
 Detuner.n_substrings = 1
 
 # Reverb
-PianoModel.reverb_model = @sub_modules.MultiInstrumentReverb()
-MultiInstrumentReverb:
+PianoModel.reverb_model = @sub_modules.MultiInstrumentFeedbackDelayReverb()
+MultiInstrumentFeedbackDelayReverb:
     n_instruments = %n_instruments
-    reverb_duration = %reverb_duration
+    # reverb_duration = %reverb_duration
     sample_rate = %sample_rate
 
 # Context network
@@ -74,21 +74,11 @@ context_net/layers.GRU:
     return_sequences = True
 
 # Monophonic network
-PianoModel.monophonic_network = @sub_modules.MonophonicNetwork()
-MonophonicNetwork:
-	name = 'mono_net'
-	layers = [@mono_net/dense1/layers.Dense(),
-              @mono_net/layers.GRU(),
-              @mono_net/dense2/layers.Dense()]
-mono_net/dense1/layers.Dense:
-    units = 128
-    activation = @tf.nn.leaky_relu
-mono_net/layers.GRU:
-    units = 192
-    return_sequences = True
-mono_net/dense2/layers.Dense:
-    units = 192
-    activation = @tf.nn.leaky_relu
+PianoModel.monophonic_network = @sub_modules.MonophonicDeepNetwork()
+MonophonicDeepNetwork:
+    name = 'mono_net'
+    ch = 256
+    rnn_channels = 256
 
 # Polyphonic processor group
 PianoModel.processor_group = @processors.ProcessorGroup()
@@ -112,20 +102,23 @@ inharm_synth.MultiInharmonic:
     frame_rate = %frame_rate
     sample_rate = %sample_rate
     scale_fn = @exp_tanh
-    normalize_harm_distribution = False
+    normalize_after_nyquist_cut = False
     inference = %inference
-effects.Reverb.trainable = False
+effects.Reverb:
+    trainable = False
+    add_dry = False
 
 
 # ======
 # Losses
 # ======
 PianoModel.losses = [@ddsp_piano.modules.losses.SpectralLoss(),
-                     @ReverbRegularizer()]
+                     # @ReverbRegularizer()
+                     ]
 ddsp_piano.modules.losses.SpectralLoss:
     name = 'audio_stft_loss'
     loss_type = 'L1'
     mag_weight = 1.0
     logmag_weight = 1.0
-ReverbRegularizer.name = 'reverb_regularizer'
+# ReverbRegularizer.name = 'reverb_regularizer'
 

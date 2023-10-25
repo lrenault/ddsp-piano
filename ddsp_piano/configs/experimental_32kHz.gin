@@ -62,24 +62,26 @@ context_net/layers.GRU:
     return_sequences = True
 
 # Monophonic network
-PianoModel.monophonic_network = @sub_modules.MonophonicNetwork()
+PianoModel.monophonic_network = @sub_modules.MonophonicDeepNetwork()
 MonophonicNetwork:
 	name = 'mono_net'
-	layers = [@mono_net/dense1/layers.Dense(),
-              @mono_net/layers.GRU(),
-              @mono_net/dense2/layers.Dense()]
+	# layers = [@mono_net/dense1/layers.Dense(),
+    #           @mono_net/layers.GRU(),
+    #           @mono_net/dense2/layers.Dense()]
+    ch = 256
+    rnn_channels = 256
 	output_splits = (('amplitudes', 1),
                      ('harmonic_distribution', 192),
                      ('magnitudes', 128))
-mono_net/dense1/layers.Dense:
-    units = 128
-    activation = @tf.nn.leaky_relu
-mono_net/layers.GRU:
-    units = 192
-    return_sequences = True
-mono_net/dense2/layers.Dense:
-    units = 192
-    activation = @tf.nn.leaky_relu
+# mono_net/dense1/layers.Dense:
+#     units = 128
+#     activation = @tf.nn.leaky_relu
+# mono_net/layers.GRU:
+#     units = 192
+#     return_sequences = True
+# mono_net/dense2/layers.Dense:
+#     units = 192
+#     activation = @tf.nn.leaky_relu
 
 # Polyphonic processor group
 PianoModel.processor_group = @processors.ProcessorGroup()

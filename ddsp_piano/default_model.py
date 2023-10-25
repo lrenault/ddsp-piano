@@ -10,6 +10,10 @@ tfkl = tf.keras.layers
 
 # ===========
 # This config script is deprecated in favor of gin-config files.
+# This file is kept for legacy purpose (as it corresponds to the model version
+# of the paper) and can serve as an example of configuring a model without gin.
+# 
+# The .gin equivalent to this model is located in ddsp_piano/configs/default.gin
 # ===========
 
 
