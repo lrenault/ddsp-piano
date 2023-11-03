@@ -49,9 +49,9 @@ PianoModel.inharm_model = @sub_modules.ParametricTuning()
 # Context network
 PianoModel.context_network = @sub_modules.ContextNetwork()
 ContextNetwork:
-	name = 'context_net'
-	normalize_pitch = True
-	layers = [@context_net/layers.Dense(),
+    name = 'context_net'
+    normalize_pitch = True
+    layers = [@context_net/layers.Dense(),
               @context_net/layers.GRU(),
               @context_net/nn.Normalize()]
 context_net/layers.Dense:
@@ -63,14 +63,14 @@ context_net/layers.GRU:
 
 # Monophonic network
 PianoModel.monophonic_network = @sub_modules.MonophonicDeepNetwork()
-MonophonicNetwork:
-	name = 'mono_net'
-	# layers = [@mono_net/dense1/layers.Dense(),
+sub_modules.MonophonicDeepNetwork:
+    name = 'mono_net'
+    # layers = [@mono_net/dense1/layers.Dense(),
     #           @mono_net/layers.GRU(),
     #           @mono_net/dense2/layers.Dense()]
     ch = 256
     rnn_channels = 256
-	output_splits = (('amplitudes', 1),
+    output_splits = (('amplitudes', 1),
                      ('harmonic_distribution', 192),
                      ('magnitudes', 128))
 # mono_net/dense1/layers.Dense:
@@ -107,10 +107,11 @@ inharm_synth.MultiInharmonic:
     sample_rate = %sample_rate
     inference = %inference
     scale_fn = @exp_tanh
+    normalize_after_nyquist_cut = False
 priv_ddfx.effects.DelayNetwork:
-	trainable = True
-	freq_points = 64000
-	sampling_rate = %sample_rate
+    trainable = True
+    freq_points = 64000
+    sampling_rate = %sample_rate
 
 
 

@@ -304,7 +304,6 @@ class MultiInstrumentFeedbackDelayReverb(nn.DictLayer):
         self._time_rev_0_sec = tfkl.Embedding(
             self.n_instruments, 1,
             embeddings_initializer=tf.random_normal_initializer(mean=2., stddev=5e-1),
-            embeddings_constraint=tf.keras.constraints.NonNeg()
         )
         self._alpha_tone = tfkl.Embedding(
             self.n_instruments, 1,
@@ -337,12 +336,12 @@ class MultiInstrumentFeedbackDelayReverb(nn.DictLayer):
         output_gain = self._output_gain(piano_model, training=training)
         gain_allpass = self.reshape_embedding(self._gain_allpass(piano_model, training=training))
         delays_allpass = self.reshape_embedding(self._delays_allpass(piano_model, training=training))
-        time_rev_0_sec = self._time_rev_0_sec(piano_model, training=training)
+        time_rev_0_sec = tf.nn.relu(self._time_rev_0_sec(piano_model, training=training))
         alpha_tone = tf.math.sigmoid(self._alpha_tone(piano_model, training=training))
 
         ir = tf.TensorArray(tf.float32, size=batch_size)
         for b in tf.range(batch_size):
-            ir.write(b, self.reverb_model.get_ir(
+            ir = ir.write(b, self.reverb_model.get_ir(
                 **self.reverb_model.get_controls(
                     audio_dry=None,
                     early_ir=early_ir[b],

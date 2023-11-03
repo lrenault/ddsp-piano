@@ -77,8 +77,8 @@ context_net/layers.GRU:
 PianoModel.monophonic_network = @sub_modules.MonophonicDeepNetwork()
 MonophonicDeepNetwork:
     name = 'mono_net'
-    ch = 256
-    rnn_channels = 256
+    ch = 192
+    rnn_channels = 192
 
 # Polyphonic processor group
 PianoModel.processor_group = @processors.ProcessorGroup()
