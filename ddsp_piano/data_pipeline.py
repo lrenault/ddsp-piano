@@ -19,27 +19,23 @@ def get_dummy_data(batch_size=6,
     piano_model_shape = [batch_size, 1, ]
     audio_shape = [batch_size, n_samples, ]
 
-    features = {}
-    features['conditioning'] = tf.random.uniform(
-        shape=tf.TensorShape(conditioning_shape),
-        minval=0., maxval=1.,
-        seed=0
-    )
-    features['pedal'] = tf.random.uniform(
-        shape=tf.TensorShape(pedal_shape),
-        minval=0., maxval=1.,
-        seed=0
-    )
-    features['audio'] = tf.random.uniform(
-        shape=tf.TensorShape(audio_shape),
-        minval=0., maxval=1.,
-        seed=0
-    )
-    features['piano_model'] = tf.random.uniform(
-        shape=tf.TensorShape(piano_model_shape),
-        minval=0, maxval=1, dtype=tf.int32,
-        seed=0
-    )
+    features = {
+        "conditioning": tf.random.uniform(
+            shape=tf.TensorShape(conditioning_shape),
+            minval=0., maxval=1., seed=0),
+
+        "pedal": tf.random.uniform(
+            shape=tf.TensorShape(pedal_shape),
+            minval=0., maxval=1., seed=0),
+
+        "audio": tf.random.uniform(
+            shape=tf.TensorShape(audio_shape),
+            minval=0., maxval=1., seed=0),
+
+        "piano_model": tf.random.uniform(
+            shape=tf.TensorShape(piano_model_shape),
+            minval=0, maxval=1, seed=0, dtype=tf.int32)
+    }
 
     return features
 
@@ -89,9 +85,9 @@ def get_preprocessed_dataset(dataset_dir,
     """
     # Init tf.dataset from .csv file
     dataset, n_examples, piano_models = io_utils.dataset_from_csv(
-        # join(dataset_dir, "maestro-v3.0.0.csv"),
+        join(dataset_dir, "maestro-v3.0.0.csv"),
         # join(dataset_dir, "maps_MUS_dataset.csv"),
-        join(dataset_dir, "mel2mel_MUS_dataset.csv"),
+        # join(dataset_dir, "mel2mel_MUS_dataset.csv"),
         split=split,
         year=year,
         **kwargs
@@ -165,7 +161,7 @@ def get_dataset(filename,
     # Data loading
     if ".tfrecord" in filename:
         # Load preprocessed data from the .tfrecord
-        dataset = tf.data.experimental.load(filename)
+        dataset = tf.data.Dataset.load(filename)
     else:
         # Process data on the fly from the maestro-v3.0.0/ folder
         dataset = get_preprocessed_dataset(
@@ -183,30 +179,15 @@ def get_dataset(filename,
         dataset = dataset.shuffle(buffer_size=len(dataset),
                                   seed=0,
                                   reshuffle_each_iteration=True)
-    # Split tracks dataset into segments dataset
+
+    # Split tracks into segments
     dataset = dataset.map(
-        lambda sample: dict(
-            sample,
-            audio=tf.py_function(
-                io_utils.split_sequence,
-                [sample['audio'], duration, sample_rate],
-                Tout=(tf.float32)
-            ),
-            conditioning=tf.py_function(
-                io_utils.split_sequence,
-                [sample['conditioning'], duration, frame_rate],
-                Tout=(tf.float32)
-            ),
-            pedal=tf.py_function(
-                io_utils.split_sequence,
-                [sample['pedal'], duration, frame_rate],
-                Tout=(tf.float32)
-            ),
-            polyphony=tf.py_function(
-                io_utils.split_sequence,
-                [sample['polyphony'], duration, frame_rate],
-                Tout=(tf.int32)
-            )),
+        lambda x: dict(
+            x,
+            audio=io_utils.split_sequence_tf(x['audio'], duration, sample_rate),
+            conditioning=io_utils.split_sequence_tf(x['conditioning'], duration, frame_rate),
+            pedal=io_utils.split_sequence_tf(x['pedal'], duration, frame_rate),
+            polyphony=io_utils.split_sequence_tf(x['polyphony'], duration, frame_rate)),
         num_parallel_calls=num_parallel_calls)
 
     # Fix border issue
@@ -217,39 +198,38 @@ def get_dataset(filename,
                                       len(sample["conditioning"])])),
         num_parallel_calls=num_parallel_calls)
 
-    # Create a new dataset by making an entry for each segment
+    # Flatten the dataset with segments list into a dataset of segments
     dataset = dataset.flat_map(
-        lambda sample: tf.data.Dataset.zip((
-            tf.data.Dataset.from_tensor_slices(
+        lambda sample: tf.data.Dataset.zip(dict(
+            audio=tf.data.Dataset.from_tensor_slices(
                 sample["audio"][:sample["n_segments"]]
             ),
-            tf.data.Dataset.from_tensor_slices(
+            conditioning=tf.data.Dataset.from_tensor_slices(
                 sample["conditioning"][:sample["n_segments"]]
             ),
-            tf.data.Dataset.from_tensor_slices(
+            pedal=tf.data.Dataset.from_tensor_slices(
                 sample["pedal"][:sample["n_segments"]]
             ),
-            tf.data.Dataset.from_tensor_slices(
+            polyphony=tf.data.Dataset.from_tensor_slices(
                 sample["polyphony"][:sample["n_segments"]]
             ),
-            tf.data.Dataset.from_tensor_slices(
+            piano_model=tf.data.Dataset.from_tensor_slices(
                 tf.repeat(sample["piano_model"],
-                          repeats=sample["n_segments"])
+                          repeats=sample["n_segments"])[..., tf.newaxis]
             )
         ))
     )
     # Filter out segments with polyphony exceeding supported polyphony
     if filter_over_polyphony:
         dataset = dataset.filter(
-            lambda *sample: tf.reduce_max(sample[3]) <= max_polyphony
-        )
-    # Rename keys
+            lambda x: tf.reduce_max(x["polyphony"]) <= max_polyphony)
+
+    # Keep relevant entries
     dataset = dataset.map(
-        lambda *sample: {
-            "audio": sample[0],
-            "conditioning": sample[1],
-            "pedal": sample[2],
-            "piano_model": sample[4][..., tf.newaxis]},
+        lambda x: {k: x[k] for k in ['audio',
+                                     'conditioning',
+                                     'pedal',
+                                     'piano_model']},
         num_parallel_calls=num_parallel_calls)
 
     # Infinite generator
@@ -303,10 +283,10 @@ def single_track_dataset(midi_filename,
     )
     # Split track into multiple segments
     if len(conditioning) / float(frame_rate) > duration:
-        audio = io_utils.split_sequence(audio, duration, sample_rate)
-        conditioning = io_utils.split_sequence(conditioning, duration, frame_rate)
-        pedal = io_utils.split_sequence(pedal, duration, frame_rate)
-        polyphony = io_utils.split_sequence(polyphony, duration, frame_rate)
+        audio = io_utils.split_sequence_tf(audio, duration, sample_rate)
+        conditioning = io_utils.split_sequence_tf(conditioning, duration, frame_rate)
+        pedal = io_utils.split_sequence_tf(pedal, duration, frame_rate)
+        polyphony = io_utils.split_sequence_tf(polyphony, duration, frame_rate)
 
         n_segments = min(len(audio), len(conditioning))
 
@@ -361,11 +341,6 @@ def single_track_dataset(midi_filename,
     return dataset
 
 
-def save_dataset(dataset, filename):
-    # Save preprocessed data
-    tf.data.experimental.save(dataset, filename)
-
-
 def preprocess_data_into_tfrecord(filename, **kwargs):
     """Parse through a maestro dataset and save preprocessing as a .tfrecord
     Typical usage would be:
@@ -378,4 +353,4 @@ def preprocess_data_into_tfrecord(filename, **kwargs):
     )
     ``` """
     dataset = get_preprocessed_dataset(**kwargs)
-    save_dataset(dataset, filename)
+    dataset.save(filename)

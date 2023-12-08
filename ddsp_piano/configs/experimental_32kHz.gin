@@ -69,7 +69,7 @@ sub_modules.MonophonicDeepNetwork:
     #           @mono_net/layers.GRU(),
     #           @mono_net/dense2/layers.Dense()]
     ch = 256
-    rnn_channels = 256
+    rnn_channels = 192  # 256
     output_splits = (('amplitudes', 1),
                      ('harmonic_distribution', 192),
                      ('magnitudes', 128))

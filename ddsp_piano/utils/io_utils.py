@@ -209,34 +209,22 @@ def ensure_sequence_length(sequence, length):
         return np.pad(sequence, pad_width=pad_width)
 
 
-def split_sequence(x, segment_duration, rate, overlap=0.5):
-    """Split sequence x into fixed size segments.
-    Args:
-        - x: a sequence to split.
-        - segment_duration (float): duration (in s) of the segments.
-        - rate (int): signal/frame rate of the sequence.
-        - overlap (float): overlap ratio between two consecutive segments.
-    Returns:
-        - segments (list): list of split segments.
-    """
+@tf.function
+def split_sequence_tf(x, segment_duration, rate, overlap=0.5):
     n_samples = int(segment_duration * rate)
     hop_size = int(n_samples * (1 - overlap))
 
-    segments = []
-    segments.append(ensure_sequence_length(x[:n_samples],
-                                           n_samples))
-    timestep = hop_size
-    while timestep + n_samples < np.shape(x)[0]:
-        segment = x[timestep: timestep + n_samples]
-        segment = ensure_sequence_length(segment, n_samples)
+    segments = tf.TensorArray(dtype=x.dtype, size=1, dynamic_size=True)
 
-        segments.append(segment)
+    timestep, segment_idx = 0, 0
+    while timestep + n_samples <= tf.shape(x)[0]:
+        segments = segments.write(segment_idx,
+                                  x[timestep: timestep + n_samples, ...])
+        # segment = ensure_sequence_length(segment, n_samples)
         timestep += hop_size
-
-    if len(segments) > 1:
-        return np.stack(segments)
-    else:
-        return np.array(segments)
+        segment_idx += 1
+    segments = segments.stack()
+    return segments
 
 
 def collect_garbage():

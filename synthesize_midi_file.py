@@ -55,6 +55,7 @@ def main(args):
                                      sample_rate=model.sample_rate))
         # Restore model weight
         print("Model built, now retrieving model weights...")
+        trainer.optimizer = tf.keras.optimizers.legacy.Adam()
         trainer.restore(args.ckpt)
 
     # Forward pass

@@ -113,7 +113,7 @@ def main(args):
         # Model building
         _ = trainer.run(
             tf.function(trainer.model.__call__),
-            get_dummy_data(batch_size=args.batch_size, # int(args.batch_size / max(args.n_gpus, 1)),
+            get_dummy_data(batch_size=args.batch_size,
                            sample_rate=model.sample_rate),
             training=True,
             return_losses=True,
@@ -123,8 +123,6 @@ def main(args):
         if args.restore is not None:
             trainer.restore(args.restore)
             print(f"Restored model from {args.restore} at step {trainer.step.numpy()}")
-
-    loss_keys = model._losses_dict.keys()
 
     # Dataset loading
     val_path = args.maestro_path if args.val_path is None else args.val_path
@@ -154,6 +152,7 @@ def main(args):
     summary_writer = create_file_writer(osjoin(exp_dir, "logs"))
 
     # Training loop
+    loss_keys = model._losses_dict.keys()
     lowest_val_loss = 9999999.
     try:
         with summary_writer.as_default():
