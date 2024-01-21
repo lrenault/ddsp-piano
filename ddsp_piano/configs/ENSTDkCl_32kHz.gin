@@ -62,14 +62,24 @@ context_net/layers.GRU:
     return_sequences = True
 
 # Monophonic network
-PianoModel.monophonic_network = @sub_modules.MonophonicDeepNetwork()
-sub_modules.MonophonicDeepNetwork:
+PianoModel.monophonic_network = @sub_modules.MonophonicNetwork()
+sub_modules.MonophonicNetwork:
     name = 'mono_net'
-    ch = 256
-    rnn_channels = 192  # 256
+    layers = [@mono_net/dense1/layers.Dense(),
+              @mono_net/layers.GRU(),
+              @mono_net/dense2/layers.Dense()]
     output_splits = (('amplitudes', 1),
                      ('harmonic_distribution', 192),
                      ('magnitudes', 128))
+mono_net/dense1/layers.Dense:
+    units = 128
+    activation = @tf.nn.leaky_relu
+mono_net/layers.GRU:
+    units = 192
+    return_sequences = True
+mono_net/dense2/layers.Dense:
+    units = 192
+    activation = @tf.nn.leaky_relu
 
 # Polyphonic processor group
 PianoModel.processor_group = @processors.ProcessorGroup()
@@ -78,6 +88,7 @@ polyphonic_dag.polyphonic_dag:
     n_synths = %n_synths
     additive = @inharm_synth.MultiInharmonic()
     additive_controls = ['amplitudes', 'harmonic_distribution', 'inharm_coef', 'f0_hz']
+    # noise = @synths.FilteredNoise()
     noise = @inharm_synth.DynamicSizeFilteredNoise()
     noise_controls = ['magnitudes']
     reverb = @priv_ddfx.effects.DelayNetwork()
@@ -97,8 +108,9 @@ inharm_synth.MultiInharmonic:
     normalize_after_nyquist_cut = False
 priv_ddfx.effects.DelayNetwork:
     trainable = True
-    # delay_trainable = True
+    delay_trainable = True
     freq_points = 64000
+    delay_lines = 6
     sampling_rate = %sample_rate
 
 

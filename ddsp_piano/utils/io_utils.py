@@ -84,7 +84,8 @@ def load_midi_as_note_sequence(mid_path):
 def load_midi_as_conditioning(mid_path,
                               n_synths=16,
                               frame_rate=250,
-                              duration=None):
+                              duration=None,
+                              warm_up_duration=0.):
     """Load MIDI file as conditioning and pedal inputs for inference.
     Args:
         - mid_path (path): path to .mid file.
@@ -120,12 +121,18 @@ def load_midi_as_conditioning(mid_path,
 
     # Crop/pad inputs
     conditioning = ensure_sequence_length(conditioning, target_n_frames)
-    pedals = ensure_sequence_length(pedals, target_n_frames)
+    pedals       = ensure_sequence_length(pedals, target_n_frames)
+
+    # Warm-up by padding at the beginning
+    if warm_up_duration > 0.:
+        n_frames = target_n_frames + int(warm_up_duration * frame_rate)
+        conditioning = ensure_sequence_length(conditioning, n_frames, right=False)
+        pedals       = ensure_sequence_length(pedals, n_frames, right=False)
 
     # Return with a batch size of 1
     return {'conditioning': conditioning[np.newaxis, ...],
             'pedal': pedals[np.newaxis, ...],
-            'duration': target_n_frames / frame_rate}
+            'duration': target_n_frames / frame_rate + warm_up_duration}
 
 
 def load_data(audio_path,
@@ -192,18 +199,24 @@ def load_data_tf(audio_path, mid_path, max_polyphony, sample_rate, frame_rate):
             "polyphony": polyphony}
 
 
-def ensure_sequence_length(sequence, length):
-    """Zero-pad or crop sequence to fit desired length."""
+def ensure_sequence_length(sequence, length, right=True):
+    """Zero-pad or crop sequence to fit desired length.
+    Args:
+        - sequence (time, ...): sequence to truncate/pad.
+        - length (int): desired sequence length.
+        - right (bool): whether to truncate/pad at sequence end or beginning.
+    """
     original_length = sequence.shape[0]
     # Return as is
     if original_length == length:
         return sequence
     # Crop
     elif original_length > length:
-        return sequence[:length]
+        return sequence[:length] if right else sequence[-length:]
     # Pad
     else:
-        pad_width = [(0, int(length - original_length))]
+        pad_width = [(0, int(length - original_length))] if right else \
+                    [(int(length - original_length), 0)]
         for _ in range(len(sequence.shape) - 1):
             pad_width += [(0, 0)]
         return np.pad(sequence, pad_width=pad_width)

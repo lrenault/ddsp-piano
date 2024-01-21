@@ -18,6 +18,8 @@ def process_args():
     parser.add_argument('--piano_type', type=int, default=3,
                         help="Piano model (from 0 to 9).\
                               (default: %(default)s)")
+    parser.add_argument('--warm_up', '-wu', type=float, default=0.5,
+                        help="Warm-up duration (in s, default: %(default)s)")
     parser.add_argument('--duration', '-d', type=float, default=None,
                         help="Maximum duration of synthesized audio.\
                               (default: %(default)s)")
@@ -33,11 +35,13 @@ def process_args():
 def main(args):
     # Load MIDI data
     print("Loading midi file...")
-    inputs = load_midi_as_conditioning(args.midi_file, duration=args.duration)
+    inputs = load_midi_as_conditioning(args.midi_file,
+                                       duration=args.duration,
+                                       warm_up_duration=args.warm_up)
     # Add piano model conditioning
     inputs['piano_model'] = tf.convert_to_tensor([[args.piano_type]])
 
-    print(f"Midi file loaded (with duration {inputs['duration']} s).\
+    print(f"Midi file loaded (with duration {inputs['duration'] - args.warm_up} s).\
             \nNow building the piano synthesizer...")
 
     # Parse and override gin-config
@@ -61,17 +65,17 @@ def main(args):
     # Forward pass
     print(f"Model weights loaded from {args.ckpt} \
            \nNow synthesizing audio (this could take some time)...")
-    outputs = model(inputs)
+    outs = model(inputs)
 
     # Save final audio
     write(args.out_file,
-          data=outputs['audio_synth'][0].numpy(),
+          data=outs['audio_synth'][0, int(args.warm_up * model.sample_rate):].numpy(),
           samplerate=model.sample_rate)
 
     # Save dry audio (optional)
     if args.unreverbed:
         write(args.out_file + "_unreverbed.wav",
-              data=outputs['add']['signal'][0].numpy(),
+              data=outs['add']['signal'][0, int(args.warm_up * model.sample_rate):].numpy(),
               samplerate=model.sample_rate)
 
     print(f"Audio saved at {args.out_file}.")

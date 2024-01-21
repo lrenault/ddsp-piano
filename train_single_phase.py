@@ -1,6 +1,5 @@
 import os
 import gin
-import socket
 import argparse
 import tensorflow as tf
 
@@ -66,6 +65,8 @@ def process_args():
 
 
 def lock_gpu(soft=True, gpu_device_id=-1):
+    import socket
+
     if "ircam.fr" in socket.gethostname():
         import manage_gpus as gpl
     else:

@@ -9,10 +9,9 @@ n_instruments = 1
 n_synths = 16
 
 frame_rate = 250
-sample_rate = 32000
+sample_rate = 8000
 
 duration = 3
-reverb_duration = 1.5
 
 inference = False
 
@@ -27,30 +26,23 @@ get_model.model = @piano_model.PianoModel()
 # Sub-modules
 # ===========
 
-# Z-Encoder
-PianoModel.z_encoder = @sub_modules.OneHotZEncoder()
-OneHotZEncoder:
-    z_dim = 16
-    n_instruments = %n_instruments
-    duration = %duration
-    frame_rate = %frame_rate
-
 # Note release
 PianoModel.note_release = @sub_modules.NoteRelease()
 NoteRelease.frame_rate = 250
 
 # Parallelizer
 PianoModel.parallelizer = @sub_modules.Parallelizer()
-Parallelizer.n_synths = %n_synths
+Parallelizer:
+    n_synths = %n_synths
+    global_keys = ('conditioning', 'context')
 
 # Inharmonicity and detuning model
 PianoModel.inharm_model = @sub_modules.ParametricTuning()
 
 # Context network
-PianoModel.context_network = @sub_modules.ContextNetwork()
-ContextNetwork:
+PianoModel.context_network = @sub_modules.SimpleContextNet()
+SimpleContextNet:
     name = 'context_net'
-    normalize_pitch = True
     layers = [@context_net/layers.Dense(),
               @context_net/layers.GRU(),
               @context_net/nn.Normalize()]
@@ -58,18 +50,28 @@ context_net/layers.Dense:
     units = 32
     activation = @tf.nn.leaky_relu
 context_net/layers.GRU:
-    units = 64
+    units = 32
     return_sequences = True
 
 # Monophonic network
-PianoModel.monophonic_network = @sub_modules.MonophonicDeepNetwork()
-sub_modules.MonophonicDeepNetwork:
+PianoModel.monophonic_network = @sub_modules.MonophonicNetwork()
+MonophonicNetwork:
     name = 'mono_net'
-    ch = 256
-    rnn_channels = 192  # 256
+    layers = [@mono_net/dense1/layers.Dense(),
+              @mono_net/layers.GRU(),
+              @mono_net/dense2/layers.Dense()]
     output_splits = (('amplitudes', 1),
-                     ('harmonic_distribution', 192),
-                     ('magnitudes', 128))
+                     ('harmonic_distribution', 48),
+                     ('magnitudes', 32))
+mono_net/dense1/layers.Dense:
+    units = 128
+    activation = @tf.nn.leaky_relu
+mono_net/layers.GRU:
+    units = 128
+    return_sequences = True
+mono_net/dense2/layers.Dense:
+    units = 128
+    activation = @tf.nn.leaky_relu
 
 # Polyphonic processor group
 PianoModel.processor_group = @processors.ProcessorGroup()
@@ -78,6 +80,7 @@ polyphonic_dag.polyphonic_dag:
     n_synths = %n_synths
     additive = @inharm_synth.MultiInharmonic()
     additive_controls = ['amplitudes', 'harmonic_distribution', 'inharm_coef', 'f0_hz']
+    # noise = @synths.FilteredNoise()
     noise = @inharm_synth.DynamicSizeFilteredNoise()
     noise_controls = ['magnitudes']
     reverb = @priv_ddfx.effects.DelayNetwork()
@@ -92,13 +95,13 @@ inharm_synth.MultiInharmonic:
     name = 'additive'
     frame_rate = %frame_rate
     sample_rate = %sample_rate
-    inference = %inference
-    scale_fn = @exp_tanh
     normalize_after_nyquist_cut = False
+    scale_fn = @exp_tanh
+    inference = %inference
 priv_ddfx.effects.DelayNetwork:
     trainable = True
-    # delay_trainable = True
-    freq_points = 64000
+    freq_points = 16000
+    delay_lines = 8
     sampling_rate = %sample_rate
 
 

@@ -42,11 +42,6 @@ ContextNetwork:
     name = 'context_net'
     normalize_pitch = True
     output_splits = (('magnitudes', 800), )
-    # layers = [@context_net/dense_1/layers.Dense(),
-    #           @context_net/layers.GRU(),
-    #           @context_net/nn.Normalize(),
-    #           @context_net/dense_2/layers.Dense(),
-    #           @context_net/dense_3/layers.Dense()]
     layers = [@rwkv_tf.RWKV_MODEL_Attention.RWKV(), ]
 rwkv_tf.RWKV_MODEL_Attention.RWKV:
     parallel_mode = True
@@ -54,18 +49,6 @@ rwkv_tf.RWKV_MODEL_Attention.RWKV:
                     "hidden_size": 512,
                     "vocabulary_size": 52,  # 2 * 16 + 4 + 16
                     "attention_layers": [False, True, True, False]}
-# context_net/dense_1/layers.Dense:
-#     units = 1024
-#     activation = @tf.nn.leaky_relu
-# context_net/layers.GRU:
-#     units = 1024
-#     return_sequences = True
-# context_net/dense_2/layers.Dense:
-#     units = 1024
-#     activation = @tf.nn.leaky_relu
-# context_net/dense_3/layers.Dense:
-#     units = 512
-#     activation = @tf.nn.leaky_relu
 
 # Parallelizer
 PianoModel.parallelizer = @sub_modules.Parallelizer()

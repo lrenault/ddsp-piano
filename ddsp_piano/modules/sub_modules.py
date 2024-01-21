@@ -64,7 +64,13 @@ class ContextNetwork(nn.OutputSplitsLayer):
 
 @gin.register
 class SimpleContextNet(nn.OutputSplitsLayer):
-    """Context network that does not """
+    """Context network that does not take the note conditioning into account.
+    Uses FiLM layer to incorporate instrument embedding. Can be used at
+    inference with a n_synths different from training.
+    Args:
+        - layers (list(tfkl.Layer)): model layers.
+        - output_splits (list(key, dim)): outputs keys and dims.
+    """
     def __init__(self, layers, output_splits=(('context', 32),), **kwargs):
         super().__init__(output_splits=output_splits, **kwargs)
         self.model = tf.keras.Sequential(layers=layers)
@@ -464,6 +470,7 @@ class Parallelizer(tfkl.Layer):
 
     def build(self, input_shape):
         self.batch_size = input_shape['conditioning'][0]
+        super().build(input_shape)
 
     def put_polyphony_axis_at_first(self, x):
         """Reshape feature before calling parallelize"""
@@ -926,6 +933,8 @@ class F0ProcessorCell(tfkl.Layer):
     release time.
     Args:
         - frame_rate (int): number of frames per second.
+    Variables:
+        - release_duration (1): Release time (in s).
     """
 
     def __init__(self, frame_rate=250):
@@ -934,10 +943,14 @@ class F0ProcessorCell(tfkl.Layer):
         self.state_size = 2
 
     def build(self, input_shape):
-        self.release_duration = tf.Variable(1., name="F0decay")
+        self.release_duration = tf.Variable(1.1, name="F0decay")
 
         self.trainable = False
         self.built = True
+
+    def saturated_relu(self, x, threshold=0):
+        """0 when <= threshold, 1 when > threshold, linear in between."""
+        return tf.minimum(tf.nn.relu(x - threshold), 1.)
 
     @tf.function
     def call(self, midi_note, previous_state):
@@ -947,18 +960,30 @@ class F0ProcessorCell(tfkl.Layer):
             - previous_state (batch, 2): which note was played for how long.
         """
         previous_note = previous_state[0][..., 0:1]
-        decayed_steps = previous_state[0][..., 1:2]
+        release_steps = previous_state[0][..., 1:2]
 
-        note_activity = tf.greater(midi_note, 0)
-        decay_end = tf.greater(decayed_steps, self.release_duration * self.frame_rate)
+        # Detect if a note is being input
+        note_activity = self.saturated_relu(midi_note, 0)
 
-        note_activity = tf_float32(note_activity)
-        decay_end = 1 - tf_float32(decay_end)
+        # Check if the release end time has been reached
+        release_end = self.saturated_relu(
+            release_steps, self.release_duration * self.frame_rate
+        )
+        # Output note is: input note when note is inputted;
+        # note in memory when in Release regime;
+        # 0 otherwise
+        midi_note = note_activity * midi_note \
+                  + (1. - note_activity) * previous_note \
+                  * (1. - release_end)
 
-        midi_note = note_activity * midi_note + (1 - note_activity) * decay_end * previous_note
-        decayed_steps = (1 - note_activity) * decay_end * (decayed_steps + 1)
+        # Advance the count of frames during release
+        # Reset to 0 when a note is being played (Release regime not reached yet)
+        # Or when the release end time was reached
+        release_steps = (release_steps + 1) \
+                      * (1. - note_activity) \
+                      * (1. - release_end)
 
-        updated_state = tf.concat([midi_note, decayed_steps], axis=-1)
+        updated_state = tf.concat([midi_note, release_steps], axis=-1)
 
         return midi_note, [updated_state]
 

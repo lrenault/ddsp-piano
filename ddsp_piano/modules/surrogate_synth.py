@@ -1,33 +1,39 @@
+import gin
 import tensorflow as tf
 from ddsp import core, processors
 from ddsp_piano.modules.inharm_synth import get_inharmonic_freq, cos_oscillator_bank
 
 
-def complex_harmonic_synthesis(frequencies,
-                               amplitudes,
-                               complex_amplitudes=None,
-                               complex_time=None,
-                               harmonic_shifts=None,
-                               harmonic_distribution=None,
-                               upsampling=64,
-                               sample_rate=16000,
-                               amp_resample_method='window',
-                               use_angular_cumsum=False):
-    """Surrogate bank of quasi-harmonic oscillators usign complex amplitude
+def exists(x):
+    return x is not None
+
+
+def surrogate_harmonic_synthesis(frequencies,
+                                 amplitudes,
+                                 decays=None,
+                                 decay_time=None,
+                                 harmonic_shifts=None,
+                                 harmonic_distribution=None,
+                                 upsampling=64,
+                                 sample_rate=16000,
+                                 amp_resample_method='window',
+                                 use_angular_cumsum=False):
+    """Surrogate bank of quasi-harmonic oscillators using decaying amplitudes
     for allowing frequency optimzation in the complex circle
-    (see B. Hayes - Sinusoidal Frequency Estimation by Gradient Descent).
+    (cf B. Hayes - Sinusoidal Frequency Estimation by Gradient Descent).
 
     Args:
         - frequencies (batch, n_frames, 1): frame-wise fundamental frequency
         in Hz.
         - amplitudes (batch, n_frames, 1): frame-wise oscillator real amplitude
-        - complex_amplitudes (batch, n_frames, n_harmonics): frame-wise complex
-        magnitudes.
+        - decays (batch, n_frames, n_harmonics): frame-wise decay factor.
+        - decay_time (batch, n_frames, 1): frame wise timesteps for
+        each 
         - harmoninc_shifts (batch, n_frames, n_harmonics): harmonnic frequency
         variation (Hz), zero-centered.
         - harmonic_distribution (batch, n_frames, n_harmonics): energy distri-
         bution along all partials.
-        - n_samples (int): total length of output audio.
+        - upsampling (int): ratio between control rate and sample rate.
         - sample_rate (int): number of audio samples per second.
         - amp_resample_method (str): mode with which to resample envelopes.
         - use_angular_cumsum (bool): use angular cumulative sum on accumulating
@@ -42,10 +48,10 @@ def complex_harmonic_synthesis(frequencies,
     n_frames = int(frequencies.shape[1])
     n_samples = upsampling * n_frames
 
-    if harmonic_distribution is not None:
+    if exists(harmonic_distribution):
         harmonic_distribution = core.tf_float32(harmonic_distribution)
         n_harmonics = int(harmonic_distribution.shape[-1])
-    elif harmonic_shifts is not None:
+    elif exists(harmonic_shifts):
         harmonic_shifts = core.tf_float32(harmonic_shifts)
         n_harmonics = int(harmonic_shifts.shape[-1])
     else:
@@ -54,11 +60,11 @@ def complex_harmonic_synthesis(frequencies,
     # Create (in-)harmonic frequencies (batch, n_frames, n_harmonics)
     harmonic_frequencies = core.get_harmonic_frequencies(frequencies,
                                                          n_harmonics)
-    if harmonic_shifts is not None:
+    if exists(harmonic_shifts):
         harmonic_frequencies *= (1.0 + harmonic_shifts)
 
     # Create harmonic amplitudes (batch, n_frames, n_harmonics)
-    if harmonic_distribution is not None:
+    if exists(harmonic_distribution):
         harmonic_amplitudes = amplitudes * harmonic_distribution
     else:
         harmonic_amplitudes = amplitudes
@@ -69,27 +75,26 @@ def complex_harmonic_synthesis(frequencies,
                                         method=amp_resample_method)
 
     # Compute real exponential decay of complex amplitudes
-    if (complex_amplitudes is not None) and (complex_time is not None):
+    if (exists(decays)) and (exists(decay_time)):
         # Convert to float
-        complex_amplitudes = core.tf_float32(complex_amplitudes)
-        complex_time = core.tf_float32(complex_time)
+        decays = core.tf_float32(decays)
+        decay_time = core.tf_float32(decay_time)
 
         # Upsampling frame rate to sample rate by repeating
-        complex_amp_env = tf.repeat(complex_amplitudes, upsampling, axis=1)
-        complex_sampletime = tf.repeat(complex_time, upsampling, axis=1) * upsampling
-
+        decay_env = tf.repeat(decays, upsampling, axis=1)
+        decay_time_upsampled = tf.repeat(decay_time, upsampling, axis=1) \
+                               * upsampling
         # Complete the sample-wise time count by incrementing
         upsampling_range = tf.range(upsampling, dtype=tf.float32)
         upsampling_range = tf.tile(upsampling_range[tf.newaxis, ..., tf.newaxis],
                                    [batch_size, n_frames, n_harmonics])
-
-        complex_sampletime += upsampling_range
+        decay_time_upsampled += upsampling_range
         
-        complex_amp_env = tf.math.pow(tf.math.sqrt(tf.math.square(complex_amp_env)),
-                                      complex_sampletime)
+        decay_env = tf.math.pow(tf.math.abs(decay_env),
+                                decay_time_upsampled)
 
         # Multiply amplitudes deduced from complex with real amplitudes
-        amplitude_envelopes *= complex_amp_env
+        amplitude_envelopes *= decay_env
 
     # Synthesize audio from harmonics (batch, n_samples)
     audio = cos_oscillator_bank(frequency_envelopes,
@@ -99,9 +104,10 @@ def complex_harmonic_synthesis(frequencies,
     return audio
 
 
+@gin.register
 class SurrogateAdditive(processors.Processor):
     """Surrogate synthesizer with inharmonic sinusoidal oscillators optimizable
-    using complex amplitudes.
+    using decaying amplitudes.
     Args:
         - frame_rate (int): number of frame-wise controls per second.
         - sample_rate (int): audio sample rate.
@@ -127,15 +133,15 @@ class SurrogateAdditive(processors.Processor):
     
     def get_controls(self,
                      amplitudes,
-                     complex_amplitudes,
-                     complex_time,
+                     decays,
+                     decay_time,
                      harmonic_distribution,
                      inharm_coef,
                      f0_hz):
         """Convert network output tensors into a dictionary of synth controls.
         Args:
             - amplitudes (batch, time, 1): global real amplitude control.
-            - complex_amplitudes (batch, time, n_harmonics): 
+            - decays (batch, time, n_harmonics): 
             - harmonic_distribution (batch, time, n_harmonics): per harmonic
             normalized amplitudes.
             - inharm_coef (batch, time, 1): inhamonicity coefficient.
@@ -143,7 +149,7 @@ class SurrogateAdditive(processors.Processor):
         Returns:
             - controls (Dict): dict of synthesizer controls.
         """
-        if self.scale_fn is not None:
+        if exists(self.scale_fn):
             amplitudes = self.scale_fn(amplitudes)
             harmonic_distribution = self.scale_fn(harmonic_distribution)
 
@@ -153,15 +159,15 @@ class SurrogateAdditive(processors.Processor):
         inharmonic_freq, harmonic_shifts = get_inharmonic_freq(f0_hz,
                                                                inharm_coef,
                                                                n_harmonics)
-        # Clip complex amplitude to prevent explosion
-        if complex_amplitudes is not None:
-            complex_amplitudes = tf.math.minimum(complex_amplitudes, 1.)
-            complex_amplitudes = tf.math.maximum(complex_amplitudes, 1e-5)
+        # Clip decay values to prevent explosion
+        if exists(decays):
+            decays = tf.math.minimum(decays, 1.)
+            decays = tf.math.maximum(decays, 1e-5)
             # Clip above Nyquist
-            complex_amplitudes = tf.where(
+            decays = tf.where(
                 tf.greater_equal(inharmonic_freq, self.sample_rate / 2.),
-                tf.ones_like(complex_amplitudes),
-                complex_amplitudes,
+                tf.ones_like(decays),
+                decays,
             )
         if self.normalize_below_nyquist:
             # Remove harmonics above Nyquist
@@ -181,24 +187,24 @@ class SurrogateAdditive(processors.Processor):
             )
 
         return {'amplitudes': amplitudes,
-                'complex_amplitudes': complex_amplitudes,
-                'complex_time': complex_time,
+                'decays': decays,
+                'decay_time': decay_time,
                 'harmonic_distribution': harmonic_distribution,
                 'harmonic_shifts': harmonic_shifts,
                 'f0_hz': f0_hz}
     
     def get_signal(self,
                    amplitudes,
-                   complex_amplitudes,
-                   complex_time,
+                   decays,
+                   decay_time,
                    harmonic_distribution,
                    harmonic_shifts,
                    f0_hz):
-        signal = complex_harmonic_synthesis(
+        signal = surrogate_harmonic_synthesis(
             frequencies=f0_hz,
             amplitudes=amplitudes,
-            complex_amplitudes=complex_amplitudes,
-            complex_time=complex_time,
+            decays=decays,
+            decay_time=decay_time,
             harmonic_shifts=harmonic_shifts,
             harmonic_distribution=harmonic_distribution,
             upsampling=int(self.sample_rate / self.frame_rate),
