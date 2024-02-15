@@ -34,7 +34,7 @@ def get_dummy_data(batch_size=6,
 
         "piano_model": tf.random.uniform(
             shape=tf.TensorShape(piano_model_shape),
-            minval=0, maxval=1, seed=0, dtype=tf.int32)
+            minval=0, maxval=10, seed=0, dtype=tf.int32)
     }
 
     return features

@@ -4,6 +4,7 @@ import argparse
 import tensorflow as tf
 
 from tqdm import tqdm
+from absl import logging
 from ddsp.training import trainers, train_util, summaries
 from ddsp.training.models import get_model
 from tensorflow.summary import create_file_writer, scalar
@@ -74,15 +75,30 @@ def lock_gpu(soft=True, gpu_device_id=-1):
 
     try:
         id_locked = gpl.get_gpu_lock(gpu_device_id=gpu_device_id, soft=soft)
-        print(f"Locked GPU {id_locked}")
+        logging.info(f"Locked GPU {id_locked}")
     except gpl.NoGpuManager:
         id_locked = None
-        print("No gpu manager available - will use all available GPUs")
+        logging.info("No gpu manager available - will use all available GPUs")
     except gpl.NoGpuAvailable:
         # no GPU available for locking, continue with CPU
         id_locked = None
         os.environ["CUDA_VISIBLE_DEVICES"] = ""
     return id_locked
+
+
+@tf.function
+def val_step(trainer, inputs):
+    """Distributed training step."""
+    # Wrap iterator in tf.function, slight speedup passing in iter vs batch.
+    batch = next(inputs) if hasattr(inputs, '__next__') else inputs
+    outputs, losses = trainer.run(trainer.model.__call__,
+                                  batch,
+                                  training=True,
+                                  return_losses=True)
+    # Add up the scalar losses across replicas.
+    n_replicas = trainer.strategy.num_replicas_in_sync
+    return trainer.strategy.gather(outputs, axis=0), \
+           {k: trainer.psum(v, axis=None) / n_replicas for k, v in losses.items()}
 
 
 def main(args):
@@ -111,10 +127,18 @@ def main(args):
         trainer = trainers.Trainer(model=model,
                                    strategy=strategy,
                                    learning_rate=args.lr)
+        # trainer.optimizer = tf.keras.optimizers.Adam(
+        #     tf.keras.optimizers.schedules.ExponentialDecay(
+        #         initial_learning_rate=1e-4,
+        #         decay_steps=10000,
+        #         decay_rate=0.98,
+        #     ),
+        #     jit_compile=False
+        # )
         # Model building
         _ = trainer.run(
             tf.function(trainer.model.__call__),
-            get_dummy_data(batch_size=args.batch_size,
+            get_dummy_data(batch_size=args.batch_size // args.n_gpus,
                            sample_rate=model.sample_rate),
             training=True,
             return_losses=True,
@@ -123,7 +147,7 @@ def main(args):
         # Restore model and optimizer states
         if args.restore is not None:
             trainer.restore(args.restore)
-            print(f"Restored model from {args.restore} at step {trainer.step.numpy()}")
+            logging.info(f"Restored model from {args.restore} at step {trainer.step.numpy()}")
 
     # Dataset loading
     val_path = args.maestro_path if args.val_path is None else args.val_path
@@ -137,11 +161,10 @@ def main(args):
                                          max_polyphony=model.n_synths,
                                          sample_rate=model.sample_rate)
     # Dataset distribution
-    with strategy.scope():
-        training_dataset = trainer.distribute_dataset(training_dataset)
-        val_dataset = trainer.distribute_dataset(val_dataset)
+    training_dataset = trainer.distribute_dataset(training_dataset)
+    val_dataset = trainer.distribute_dataset(val_dataset)
 
-        train_iterator = iter(training_dataset)
+    train_iterator = iter(training_dataset)
 
     # Inits before the training loop
     exp_dir = osjoin(args.exp_dir, f'phase_{args.phase}')
@@ -152,16 +175,20 @@ def main(args):
 
     summary_writer = create_file_writer(osjoin(exp_dir, "logs"))
 
+    # =============
     # Training loop
+    # =============
     loss_keys = model._losses_dict.keys()
     lowest_val_loss = 9999999.
     try:
         with summary_writer.as_default():
             for epoch in range(args.epochs):
-                print("Epoch:", epoch, "\nTraining...")
+                logging.info("Epoch:", epoch, "\nTraining...")
                 step = trainer.step  # step != epoch if resuming training
 
+                # =================
                 # Fit training data
+                # =================
                 epoch_losses = {k: 0. for k in loss_keys}
                 for _ in tqdm(range(args.steps_per_epoch), ncols=64):
                     # Train step
@@ -172,8 +199,8 @@ def main(args):
                             losses[k],
                             message=f"Nan loss at step {trainer.step.numpy()} with loss {k}"))
 
-                # Write loss values in tensorboard
-                print("Training loss:",
+                # Write training loss values in Tensorboard
+                logging.info("Training loss:",
                       epoch_losses['total_loss'] / args.steps_per_epoch)
                 for k, loss in epoch_losses.items():
                     scalar('train_loss/' + k,
@@ -185,44 +212,47 @@ def main(args):
 
                 # Save model epoch before validation
                 trainer.save(osjoin(exp_dir, "last_iter"))
-                print('Last iteration model saved at',
+                logging.info('Last iteration model saved at',
                       osjoin(exp_dir, "last_iter"))
 
+                # -------------------------------------
                 # Skip validation during early training
+                # -------------------------------------
                 if trainer.step < 3 * args.steps_per_epoch:
                     # Just add an audio summary without computing the val loss
                     val_batch = next(iter(val_dataset))
+                    outputs, _ = val_step(trainer, val_batch)
                     summaries.audio_summary(
-                        model(val_batch, training=True)["audio_synth"],
+                        outputs["audio_synth"],  # model(val_batch, training=True)["audio_synth"],
                         step,
                         sample_rate=model.sample_rate,
                         name='synthesized_audio')
                     collect_garbage()
                     continue
 
+                # ===========================
                 # Evaluate on validation data
-                print("Validation...")
+                # ===========================
+                logging.info("Validation...")
                 val_outs_summary = None
                 epoch_val_losses = {k: 0. for k in loss_keys}
-                for val_step, val_batch in enumerate(tqdm(val_dataset,
-                                                          ncols=64)):
+                for step, val_batch in enumerate(tqdm(val_dataset, ncols=64)):
                     # Validation step
-                    outputs, val_losses = model(val_batch,
-                                                return_losses=True,
-                                                training=True)
+                    outputs, val_losses = val_step(trainer, val_batch)
+
                     # Retrieve loss values
                     for k in loss_keys:
                         epoch_val_losses[k] += float(val_losses[k])
 
-                    if val_step == 0:
+                    if step == 0:
                         val_outs_summary = outputs
 
-                # Write loss values in tensorboard
-                print("Validation loss:",
-                      epoch_val_losses['total_loss'] / (val_step + 1))
+                # Write validation loss values in Tensorboard
+                logging.info("Validation loss:",
+                      epoch_val_losses['total_loss'] / (step + 1))
                 for k, loss in epoch_val_losses.items():
                     scalar('val_loss/' + k,
-                           loss / (val_step + 1),
+                           loss / (step + 1),
                            step=step)
                 summaries.audio_summary(val_outs_summary['audio_synth'],
                                         step,
@@ -241,7 +271,7 @@ def main(args):
 
     except tf.errors.InvalidArgumentError as e:
         trainer.save(osjoin(exp_dir, "crashed_iter"))
-        print(e)
+        logging.error(e)
 
     except KeyboardInterrupt:
         trainer.save(osjoin(exp_dir, "stopped_iter"))

@@ -13,4 +13,5 @@ if __name__ == "__main__":
 	model = get_model()
 	x = get_dummy_data(batch_size=6, duration=3)
 	y = model(x)
+	model.summary()
 	import pdb; pdb.set_trace()

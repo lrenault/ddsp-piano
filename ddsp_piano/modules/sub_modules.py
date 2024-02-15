@@ -83,10 +83,95 @@ class SimpleContextNet(nn.OutputSplitsLayer):
         """
         context = self.model(pedal)
 
-        # Appky instrument embedding as a FiLM layer
+        # Apply instrument embedding as a FiLM layer
         if z is not None:
             film_coef, film_bias = tf.split(z, 2, axis=-1)
             context = context * film_coef + film_bias
+
+        return context
+
+
+@gin.register
+class FiLMContextNetwork(nn.DictLayer):
+    """Compute a context signal emcompasing all contextual information for
+    future monophonic processing, namely polyphony, pedals signals and piano/
+    speaker model.
+    Uses FiLM layer for including the computed piano embedding.
+    Args:
+        - embedding_dim (int)
+        - context_dim (int): 
+    """
+    def __init__(self,
+                 n_instruments=10,
+                 layer_dim=64,
+                 context_dim=32,
+                 name="context_net",
+                 **kwargs):
+        super().__init__(name=name, **kwargs)
+        self.midi_norm = 128.
+
+        self.conditioning_head  = nn.FcStack(32, layers=2)
+        self.pedal_head         = nn.FcStack(16, layers=2)
+        self.piano_id_head      = nn.get_embedding(n_instruments, 32)
+        self.main_model         = tf.keras.Sequential(layers=[
+            tfkl.Dense(layer_dim, activation=tf.nn.leaky_relu),
+            tfkl.GRU(layer_dim, return_sequences=True),
+            tfkl.Dense(layer_dim),
+            tfkl.LayerNormalization(),
+            tfkl.Activation(tf.nn.leaky_relu),
+        ])
+        self.film_input_reshape = tfkl.Dense(layer_dim * 2)
+        self.output_layer       = nn.FcStack(context_dim, layers=2)
+
+    def collapse_last_axis(self, x, axis=-2):
+        """Merge last axis of the tensor 'x', starting from axis 'axis'.
+        For example, x[b,t,n,2] -> x[b,t,n*2] for axis=-2.
+        """
+        shape = tf.shape(x)
+        new_shape = tf.concat(
+            [shape[:axis], [tf.reduce_prod(shape[axis:])]],
+            axis=0
+        )
+        return tf.reshape(x, new_shape)
+
+    def apply_film(self, features, piano_feat):
+        """Modify intermediate features with piano model embedding
+        through a FiLM layer.
+        Args:
+            - features (batch, n_frames, n_features): input features.
+            - piano_id (batch, 1, n_features): piano model embedding.
+        """
+        # Apply FiLM layer
+        piano_feat = self.film_input_reshape(piano_feat)
+        film_coef, film_bias = tf.split(piano_feat, 2, axis=-1)
+        features = features * film_coef + film_bias
+        return features
+
+    def call(self, conditioning, pedal, piano_model) -> ['context']:
+        """Forward pass.
+        Args:
+            - conditioning (batch, n_frames, n_synths, 2): active pitch and
+            onset velocity conditioning.
+            - pedal (batch, n_frames, 4): pedal signals input.
+            - piano_model (batch,): 
+        """
+        # Normalize pitch conditioning and reshape to [b,n_frames,n_synth*2]
+        conditioning = conditioning / [self.midi_norm, 1.]
+        conditioning = self.collapse_last_axis(conditioning)
+
+        # Compute input-wise features
+        conditioning_feat = self.conditioning_head(conditioning)
+        pedal_feat = self.pedal_head(pedal)
+        piano_feat = self.piano_id_head(piano_model)
+        
+        # Concatenate conditioning and pedal features, then apply main model
+        features = tf.concat([conditioning_feat, pedal_feat], axis=-1)
+        features = self.main_model(features)
+
+        # Apply piano embedding through FiLM layer
+        features = self.apply_film(features, piano_feat)
+        # Output
+        context = self.output_layer(features)
 
         return context
 
@@ -335,15 +420,15 @@ class MultiInstrumentFeedbackDelayReverb(nn.DictLayer):
         if self.n_instruments == 1:
             piano_model = tf.zeros_like(piano_model, dtype=tf.int32)
         piano_model = piano_model[..., 0]
-        batch_size = piano_model.shape[0]
+        batch_size  = piano_model.shape[0]
         
-        early_ir = self._early_ir(piano_model, training=training)
-        input_gain = self._input_gain(piano_model, training=training)
-        output_gain = self._output_gain(piano_model, training=training)
-        gain_allpass = self.reshape_embedding(self._gain_allpass(piano_model, training=training))
+        early_ir       = self._early_ir(piano_model, training=training)
+        input_gain     = self._input_gain(piano_model, training=training)
+        output_gain    = self._output_gain(piano_model, training=training)
+        gain_allpass   = self.reshape_embedding(self._gain_allpass(piano_model, training=training))
         delays_allpass = self.reshape_embedding(self._delays_allpass(piano_model, training=training))
         time_rev_0_sec = tf.nn.relu(self._time_rev_0_sec(piano_model, training=training))
-        alpha_tone = tf.math.sigmoid(self._alpha_tone(piano_model, training=training))
+        alpha_tone     = tf.math.sigmoid(self._alpha_tone(piano_model, training=training))
 
         ir = tf.TensorArray(tf.float32, size=batch_size)
         for b in tf.range(batch_size):
@@ -402,7 +487,7 @@ class MonophonicNetwork(nn.OutputSplitsLayer):
         """
         # Normalize and concatenate inputs
         x = tf.concat([extended_pitch / self.midi_norm,
-                       conditioning / [self.midi_norm, 1.],
+                       conditioning  / [self.midi_norm, 1.],
                        context],
                       axis=-1)
         # Forward pass
@@ -464,9 +549,9 @@ class Parallelizer(tfkl.Layer):
                             'magnitudes'),
                  **kwargs):
         super(Parallelizer, self).__init__(**kwargs)
-        self.n_synths = n_synths
+        self.n_synths    = n_synths
         self.global_keys = global_keys
-        self.mono_keys = mono_keys
+        self.mono_keys   = mono_keys
 
     def build(self, input_shape):
         self.batch_size = input_shape['conditioning'][0]
@@ -474,7 +559,7 @@ class Parallelizer(tfkl.Layer):
 
     def put_polyphony_axis_at_first(self, x):
         """Reshape feature before calling parallelize"""
-        if len(x.shape) == 3:
+        if 2 <= len(x.shape) <= 3:
             # Create the polyphony axis and share value over all mono channels
             x = tf.repeat(x[tf.newaxis, ...], repeats=self.n_synths, axis=0)
 
@@ -671,9 +756,9 @@ class ParametricTuning(InharmonicityNetwork):
         ratio = midi_to_hz(notes) / midi_to_hz(self.reference_a)
 
         # Compute deviation from equal temperament of octave A
-        detuning = 1 + reference_inharm_coef * (ratio * self.streching_model(notes))**2
+        detuning  = 1 + reference_inharm_coef * (ratio * self.streching_model(notes))**2
         detuning /= 1 + self.inharm_model(notes, global_inharm) * self.streching_model(notes)**2
-        detuning = tf.math.sqrt(detuning)
+        detuning  = tf.math.sqrt(detuning)
 
         return detuning
 
@@ -682,6 +767,111 @@ class ParametricTuning(InharmonicityNetwork):
         detuning = self.get_deviation_from_ET(extended_pitch, global_inharm)
 
         f0_hz = midi_to_hz(extended_pitch) * detuning
+
+        return f0_hz, inharm_coef
+
+
+@gin.register
+class JointParametricInharmTuning(nn.DictLayer):
+    """Parametric models for joint parametrization of inharmonicity and
+    detuning along the piano tessitura, taken from [1].
+
+    DISCLAIMER: while the implementation is differentiable, the weights
+    optimization with gradient descent through MSS loss is unfeasable [2].
+    The layer is thus set as untrainable until the issue is solved.
+
+    The hard-coded embedding values correspond to the parameter estimated on
+    MAESTRO notes. If you are training on a different piano model, please
+    follow the methodology of [1] to get your piano-specific parameters.
+
+    [1] Rigaud et al. "A parametric model of piano tuning" (DAFx-11)
+    [2] Turian et al. "I'm sorry for your loss: Spectrally-Based Audio
+    Distances Are Bad at Pitch" (ICBINB - NIPS)
+
+    Weights:
+        - alpha_b   (n_instruments, 1): inharmonicity curve bass slope.
+        - beta_b    (n_instruments, 1): inharmonicity curve bass intercept.
+        - alpha_t   (n_instruments, 1): inharmonicity curve treble slope.
+        - beta_t    (n_instruments, 1): inharmonicity curve treble intercept.
+        - pitch_ref (n_instruments, 1): reference pitch.
+        - K         (n_instruments, 1): octave tuning bass asymptote.
+        - alpha     (n_instruments, 1): octave tuning decrase slope.
+    """
+    def __init__(self, n_instruments=10, pretrained_weights=None,
+                 name="parametric_tuning", **kwargs):
+        super().__init__(name=name, **kwargs)
+        self.n_instruments = n_instruments
+        self.pretrained_weights = pretrained_weights
+        # Inharmonicity parameters
+        self.alpha_b = nn.get_embedding(self.n_instruments, 1)
+        self.beta_b  = nn.get_embedding(self.n_instruments, 1)
+        self.alpha_t = nn.get_embedding(self.n_instruments, 1)
+        self.beta_t  = nn.get_embedding(self.n_instruments, 1)
+
+        # Detuning parameters (Railsback curve)
+        self.pitch_ref = nn.get_embedding(self.n_instruments, 1)
+        self.K         = nn.get_embedding(self.n_instruments, 1)
+        self.alpha     = nn.get_embedding(self.n_instruments, 1)
+
+    def set_pretrained_weights(self):
+        if self.pretrained_weights is not None:
+            def reshape_w(weights):
+                w = tf.convert_to_tensor(weights, dtype=tf.float32)
+                return [w]
+            self.alpha_b.set_weights(reshape_w(self.pretrained_weights['alpha_b']))
+            self.beta_b.set_weights(reshape_w(self.pretrained_weights['beta_b']))
+            self.alpha_t.set_weights(reshape_w(self.pretrained_weights['alpha_t']))
+            self.beta_t.set_weights(reshape_w(self.pretrained_weights['beta_t']))
+            self.pitch_ref.set_weights(reshape_w(self.pretrained_weights['pitch_ref']))
+            self.K.set_weights(reshape_w(self.pretrained_weights['K']))
+            self.alpha.set_weights(reshape_w(self.pretrained_weights['alpha']))
+
+            self.trainable = False
+
+    def reverse_scaled_tanh(self, x):
+        return (1. - tf.math.tanh(x)) / 2.
+
+    def get_inharm(self, extended_pitch, piano_model):
+        bass_asymptote   = self.alpha_b(piano_model) * extended_pitch + self.beta_b(piano_model)
+        treble_asymptote = self.alpha_t(piano_model) * extended_pitch + self.beta_t(piano_model)
+        
+        return tf.math.exp(bass_asymptote) + tf.math.exp(treble_asymptote)
+
+    def get_deviation_from_ET(self, extended_pitch, piano_model):
+        reference_pitch = self.pitch_ref(piano_model)
+        # Frequency ratio between current note and the reference note
+        ratio = midi_to_hz(extended_pitch) / midi_to_hz(reference_pitch)
+
+        # Octave tuning choice (1st, 2nd,... partial tuned w.r.t. octave)
+        rho = 1. + self.K(piano_model) * self.reverse_scaled_tanh(
+            (extended_pitch - reference_pitch) / self.alpha(piano_model)
+        )
+        # Detuning
+        detuning  = 1. + self.get_inharm(reference_pitch, piano_model) * (ratio * rho)**2
+        detuning /= 1. + self.get_inharm(extended_pitch,  piano_model) * rho**2
+        detuning  = tf.math.sqrt(detuning)
+        
+        return detuning
+
+    def call(self, extended_pitch, piano_model) -> ['f0_hz', 'inharm_coef']:
+        """Forward pass. Computing inharmonicity and detuning coefficients.
+        Args:
+            - extended_pitch (batch, n_frames, 1): input MIDI note activity
+            conditioning.
+            - piano_model (batch, 1): piano model identifer.
+        Returns:
+            - f0_hz (batch, n_frames, 1): detuned frequency control (in Hz).
+            - inharm_coef (batch, n_frames, 1): inharmonicity coefficient.
+        """
+        inharm_coef = self.get_inharm(extended_pitch, piano_model)
+        detuning    = self.get_deviation_from_ET(extended_pitch, piano_model)
+
+        f0_hz = midi_to_hz(extended_pitch) * detuning
+
+        # Set pretrained weights of embedding layers right after building
+        if not hasattr(self, 'weights_set'):
+            self.set_pretrained_weights()
+            self.weights_set = True
 
         return f0_hz, inharm_coef
 
@@ -990,8 +1180,8 @@ class F0ProcessorCell(tfkl.Layer):
 
 @gin.register
 class NoteRelease(nn.DictLayer):
-    """NoteRelease dict layer for extending the active pitch conditioning.
-    Based on the custom RNN F0ProcessorCell"""
+    """Note Release layer for extending the active pitch conditioning.
+    RNN wrapper around the custom F0ProcessorCell."""
 
     def __init__(self, frame_rate=250, name='note_release', **kwargs):
         super(NoteRelease, self).__init__(name=name, **kwargs)
