@@ -53,13 +53,14 @@ def main(args):
     with strategy.scope():
         # Model contruction
         model = get_model()
-        trainer = trainers.Trainer(model=model, strategy=strategy)
+        trainer = trainers.Trainer(model=model,
+                                   strategy=strategy)
         trainer.build(get_dummy_data(batch_size=1,
                                      duration=inputs['duration'],
                                      sample_rate=model.sample_rate))
         # Restore model weight
         print("Model built, now retrieving model weights...")
-        trainer.optimizer = tf.keras.optimizers.legacy.Adam()
+        # trainer.optimizer = tf.keras.optimizers.legacy.Adam()
         trainer.restore(args.ckpt)
 
     # Forward pass

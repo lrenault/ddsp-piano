@@ -150,13 +150,13 @@ def get_dataset(filename,
         - dataset (tf.data.Dataset): segments dataset
     """
     # Shapes definition
-    n_frames = int(duration * frame_rate)
+    n_frames  = int(duration * frame_rate)
     n_samples = int(duration * sample_rate)
 
     conditioning_shape = [n_frames, max_polyphony, 2]
-    pedal_shape = [n_frames, 4]
-    piano_model_shape = [1, ]
-    audio_shape = [n_samples, ]
+    pedal_shape        = [n_frames, 4]
+    piano_model_shape  = [1, ]
+    audio_shape        = [n_samples, ]
 
     # Data loading
     if ".tfrecord" in filename:
@@ -176,7 +176,7 @@ def get_dataset(filename,
         )
     # Shuffle on tracks
     if shuffle:
-        dataset = dataset.shuffle(buffer_size=len(dataset),
+        dataset = dataset.shuffle(buffer_size=len(dataset) // 2,
                                   seed=0,
                                   reshuffle_each_iteration=True)
 

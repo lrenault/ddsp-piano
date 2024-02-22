@@ -1,6 +1,7 @@
 import gin
 import tensorflow as tf
 from functools import partial
+from numpy import array as np_array
 from ddsp.core import tf_float32, resample, midi_to_hz, exp_sigmoid
 from ddsp.training import nn
 
@@ -409,8 +410,16 @@ class MultiInstrumentFeedbackDelayReverb(nn.DictLayer):
                                          sampling_rate=self.sample_rate)
 
     def build(self, input_shape):
-        self.reverb_model.build(input_shape)
         super().build(input_shape)
+        batch_size = input_shape[0]
+        self.reverb_model.build(input_shape)
+        self._input_gain.build((batch_size,))
+        self._output_gain.build((batch_size,))
+        self._gain_allpass.build((batch_size,))
+        self._delays_allpass.build((batch_size,))
+        self._time_rev_0_sec.build((batch_size,))
+        self._alpha_tone.build((batch_size,))
+        self._early_ir.build((batch_size,))
 
     def reshape_embedding(self, embedding, splits=4):
         splitted = tf.split(embedding, splits, axis=-1)
@@ -813,11 +822,22 @@ class JointParametricInharmTuning(nn.DictLayer):
         self.K         = nn.get_embedding(self.n_instruments, 1)
         self.alpha     = nn.get_embedding(self.n_instruments, 1)
 
-    def set_pretrained_weights(self):
+    def build(self, input_shape):
+        super().build(input_shape)
+        batch_size = input_shape[0]
+
         if self.pretrained_weights is not None:
             def reshape_w(weights):
-                w = tf.convert_to_tensor(weights, dtype=tf.float32)
+                w = np_array(weights)
                 return [w]
+            self.alpha_b.build((batch_size, 1))
+            self.beta_b.build((batch_size, 1))
+            self.alpha_t.build((batch_size, 1))
+            self.beta_t.build((batch_size, 1))
+            self.pitch_ref.build((batch_size, 1))
+            self.K.build((batch_size, 1))
+            self.alpha.build((batch_size, 1))
+
             self.alpha_b.set_weights(reshape_w(self.pretrained_weights['alpha_b']))
             self.beta_b.set_weights(reshape_w(self.pretrained_weights['beta_b']))
             self.alpha_t.set_weights(reshape_w(self.pretrained_weights['alpha_t']))
@@ -867,11 +887,6 @@ class JointParametricInharmTuning(nn.DictLayer):
         detuning    = self.get_deviation_from_ET(extended_pitch, piano_model)
 
         f0_hz = midi_to_hz(extended_pitch) * detuning
-
-        # Set pretrained weights of embedding layers right after building
-        if not hasattr(self, 'weights_set'):
-            self.set_pretrained_weights()
-            self.weights_set = True
 
         return f0_hz, inharm_coef
 

@@ -1,10 +1,10 @@
 import os
 import gin
+import logging
 import argparse
 import tensorflow as tf
 
 from tqdm import tqdm
-from absl import logging
 from ddsp.training import trainers, train_util, summaries
 from ddsp.training.models import get_model
 from tensorflow.summary import create_file_writer, scalar
@@ -87,14 +87,16 @@ def lock_gpu(soft=True, gpu_device_id=-1):
 
 
 @tf.function
-def val_step(trainer, inputs):
+def validation_step(trainer, inputs):
     """Distributed training step."""
     # Wrap iterator in tf.function, slight speedup passing in iter vs batch.
     batch = next(inputs) if hasattr(inputs, '__next__') else inputs
-    outputs, losses = trainer.run(trainer.model.__call__,
-                                  batch,
-                                  training=True,
-                                  return_losses=True)
+    outputs, losses = trainer.run(
+        tf.function(trainer.model.__call__),
+        batch,
+        training=True,
+        return_losses=True
+    )
     # Add up the scalar losses across replicas.
     n_replicas = trainer.strategy.num_replicas_in_sync
     return trainer.strategy.gather(outputs, axis=0), \
@@ -123,31 +125,9 @@ def main(args):
     with strategy.scope():
         model = get_model()
         model.alternate_training(first_phase=first_phase_strat)
-
         trainer = trainers.Trainer(model=model,
                                    strategy=strategy,
                                    learning_rate=args.lr)
-        # trainer.optimizer = tf.keras.optimizers.Adam(
-        #     tf.keras.optimizers.schedules.ExponentialDecay(
-        #         initial_learning_rate=1e-4,
-        #         decay_steps=10000,
-        #         decay_rate=0.98,
-        #     ),
-        #     jit_compile=False
-        # )
-        # Model building
-        _ = trainer.run(
-            tf.function(trainer.model.__call__),
-            get_dummy_data(batch_size=args.batch_size // args.n_gpus,
-                           sample_rate=model.sample_rate),
-            training=True,
-            return_losses=True,
-        )
-        trainer.model.summary()
-        # Restore model and optimizer states
-        if args.restore is not None:
-            trainer.restore(args.restore)
-            logging.info(f"Restored model from {args.restore} at step {trainer.step.numpy()}")
 
     # Dataset loading
     val_path = args.maestro_path if args.val_path is None else args.val_path
@@ -166,6 +146,16 @@ def main(args):
 
     train_iterator = iter(training_dataset)
 
+    # Build by executing a validation step
+    _ = validation_step(trainer, next(iter(val_dataset)))
+    trainer.model.summary()
+    print(trainer.model.inharm_model.beta_t.get_weights())
+        
+    # Restore model and optimizer states
+    if args.restore is not None:
+        trainer.restore(args.restore)
+        logging.info(f"Restored model from {args.restore} at step {trainer.step.numpy()}")
+
     # Inits before the training loop
     exp_dir = osjoin(args.exp_dir, f'phase_{args.phase}')
 
@@ -174,6 +164,7 @@ def main(args):
     os.makedirs(osjoin(exp_dir, "best_iter"), exist_ok=True)
 
     summary_writer = create_file_writer(osjoin(exp_dir, "logs"))
+    # logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
     # =============
     # Training loop
@@ -183,7 +174,7 @@ def main(args):
     try:
         with summary_writer.as_default():
             for epoch in range(args.epochs):
-                logging.info("Epoch:", epoch, "\nTraining...")
+                logging.info(f"Epoch: {epoch} \nTraining...")
                 step = trainer.step  # step != epoch if resuming training
 
                 # =================
@@ -200,31 +191,26 @@ def main(args):
                             message=f"Nan loss at step {trainer.step.numpy()} with loss {k}"))
 
                 # Write training loss values in Tensorboard
-                logging.info("Training loss:",
-                      epoch_losses['total_loss'] / args.steps_per_epoch)
+                logging.info(f"Training loss: {epoch_losses['total_loss'] / args.steps_per_epoch}")
                 for k, loss in epoch_losses.items():
                     scalar('train_loss/' + k,
                            loss / args.steps_per_epoch,
                            step=step)
-                if not first_phase_strat:
-                    inharm_summary(model.inharm_model, step=step)
-                    detune_summary(model.inharm_model, step=step)
 
                 # Save model epoch before validation
                 trainer.save(osjoin(exp_dir, "last_iter"))
-                logging.info('Last iteration model saved at',
-                      osjoin(exp_dir, "last_iter"))
+                logging.info(f'Last iteration model saved at {osjoin(exp_dir, "last_iter")}')
 
                 # -------------------------------------
                 # Skip validation during early training
                 # -------------------------------------
                 if trainer.step < 3 * args.steps_per_epoch:
                     # Just add an audio summary without computing the val loss
-                    val_batch = next(iter(val_dataset))
-                    outputs, _ = val_step(trainer, val_batch)
+                    val_batch  = next(iter(val_dataset))
+                    outputs, _ = validation_step(trainer, val_batch)
                     summaries.audio_summary(
-                        outputs["audio_synth"],  # model(val_batch, training=True)["audio_synth"],
-                        step,
+                        outputs["audio_synth"],
+                        trainer.step,
                         sample_rate=model.sample_rate,
                         name='synthesized_audio')
                     collect_garbage()
@@ -236,23 +222,22 @@ def main(args):
                 logging.info("Validation...")
                 val_outs_summary = None
                 epoch_val_losses = {k: 0. for k in loss_keys}
-                for step, val_batch in enumerate(tqdm(val_dataset, ncols=64)):
+                for val_step, val_batch in enumerate(tqdm(val_dataset, ncols=64)):
                     # Validation step
-                    outputs, val_losses = val_step(trainer, val_batch)
+                    outputs, val_losses = validation_step(trainer, val_batch)
 
                     # Retrieve loss values
                     for k in loss_keys:
                         epoch_val_losses[k] += float(val_losses[k])
 
-                    if step == 0:
+                    if val_step == 0:
                         val_outs_summary = outputs
 
                 # Write validation loss values in Tensorboard
-                logging.info("Validation loss:",
-                      epoch_val_losses['total_loss'] / (step + 1))
+                logging.info(f"Validation loss: {epoch_val_losses['total_loss'] / (val_step + 1)}")
                 for k, loss in epoch_val_losses.items():
                     scalar('val_loss/' + k,
-                           loss / (step + 1),
+                           loss / (val_step + 1),
                            step=step)
                 summaries.audio_summary(val_outs_summary['audio_synth'],
                                         step,
