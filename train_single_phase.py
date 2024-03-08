@@ -1,6 +1,5 @@
 import os
 import gin
-import logging
 import argparse
 import tensorflow as tf
 
@@ -75,10 +74,9 @@ def lock_gpu(soft=True, gpu_device_id=-1):
 
     try:
         id_locked = gpl.get_gpu_lock(gpu_device_id=gpu_device_id, soft=soft)
-        logging.info(f"Locked GPU {id_locked}")
     except gpl.NoGpuManager:
         id_locked = None
-        logging.info("No gpu manager available - will use all available GPUs")
+        print("No gpu manager available - will use all available GPUs")
     except gpl.NoGpuAvailable:
         # no GPU available for locking, continue with CPU
         id_locked = None
@@ -149,12 +147,11 @@ def main(args):
     # Build by executing a validation step
     _ = validation_step(trainer, next(iter(val_dataset)))
     trainer.model.summary()
-    print(trainer.model.inharm_model.beta_t.get_weights())
         
     # Restore model and optimizer states
     if args.restore is not None:
         trainer.restore(args.restore)
-        logging.info(f"Restored model from {args.restore} at step {trainer.step.numpy()}")
+        print(f"Restored model from {args.restore} at step {trainer.step.numpy()}")
 
     # Inits before the training loop
     exp_dir = osjoin(args.exp_dir, f'phase_{args.phase}')
@@ -164,7 +161,6 @@ def main(args):
     os.makedirs(osjoin(exp_dir, "best_iter"), exist_ok=True)
 
     summary_writer = create_file_writer(osjoin(exp_dir, "logs"))
-    # logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
     # =============
     # Training loop
@@ -174,7 +170,6 @@ def main(args):
     try:
         with summary_writer.as_default():
             for epoch in range(args.epochs):
-                logging.info(f"Epoch: {epoch} \nTraining...")
                 step = trainer.step  # step != epoch if resuming training
 
                 # =================
@@ -191,7 +186,7 @@ def main(args):
                             message=f"Nan loss at step {trainer.step.numpy()} with loss {k}"))
 
                 # Write training loss values in Tensorboard
-                logging.info(f"Training loss: {epoch_losses['total_loss'] / args.steps_per_epoch}")
+                print(f"Training loss: {epoch_losses['total_loss'] / args.steps_per_epoch}")
                 for k, loss in epoch_losses.items():
                     scalar('train_loss/' + k,
                            loss / args.steps_per_epoch,
@@ -199,7 +194,7 @@ def main(args):
 
                 # Save model epoch before validation
                 trainer.save(osjoin(exp_dir, "last_iter"))
-                logging.info(f'Last iteration model saved at {osjoin(exp_dir, "last_iter")}')
+                print(f'Last iteration model saved at {osjoin(exp_dir, "last_iter")}')
 
                 # -------------------------------------
                 # Skip validation during early training
@@ -219,7 +214,6 @@ def main(args):
                 # ===========================
                 # Evaluate on validation data
                 # ===========================
-                logging.info("Validation...")
                 val_outs_summary = None
                 epoch_val_losses = {k: 0. for k in loss_keys}
                 for val_step, val_batch in enumerate(tqdm(val_dataset, ncols=64)):
@@ -234,7 +228,7 @@ def main(args):
                         val_outs_summary = outputs
 
                 # Write validation loss values in Tensorboard
-                logging.info(f"Validation loss: {epoch_val_losses['total_loss'] / (val_step + 1)}")
+                print(f"Validation loss: {epoch_val_losses['total_loss'] / (val_step + 1)}")
                 for k, loss in epoch_val_losses.items():
                     scalar('val_loss/' + k,
                            loss / (val_step + 1),
@@ -256,7 +250,7 @@ def main(args):
 
     except tf.errors.InvalidArgumentError as e:
         trainer.save(osjoin(exp_dir, "crashed_iter"))
-        logging.error(e)
+        print(e)
 
     except KeyboardInterrupt:
         trainer.save(osjoin(exp_dir, "stopped_iter"))

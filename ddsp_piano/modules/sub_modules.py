@@ -4,6 +4,7 @@ from functools import partial
 from numpy import array as np_array
 from ddsp.core import tf_float32, resample, midi_to_hz, exp_sigmoid
 from ddsp.training import nn
+from ddsp_piano.modules.fdn_reverb import FeedbackDelayNetwork
 
 tfkl = tf.keras.layers
 
@@ -316,15 +317,16 @@ class MultiInstrumentReverb(nn.DictLayer):
         return int(self.reverb_duration * self.sample_rate)
 
     def build(self, input_shape):
+        super().build(input_shape)
         self.reverb_dict = tf.keras.Sequential(layers=[
-            tf.keras.Input(batch_size=input_shape[0], shape=(1, )),
+            tf.keras.Input(batch_size=None, # input_shape[0],
+                           shape=(1, )),
             tfkl.Embedding(self.n_instruments,
                            self.reverb_length,
                            embeddings_initializer=tf.random_normal_initializer(
                                mean=0,
                                stddev=1e-6)
                            )])
-        super(MultiInstrumentReverb, self).build(input_shape)
 
     def exponential_decay_mask(self, ir, decay_exponent=4., decay_start=16000):
         """ Apply exponential decay mask on impulse responde as in MIDI-ddsp
@@ -367,8 +369,6 @@ class MultiInstrumentFeedbackDelayReverb(nn.DictLayer):
                  early_ir_length=200,
                  **kwargs):
         super().__init__(**kwargs)
-        from priv_ddfx.effects import DelayNetwork
-
         self.n_instruments = n_instruments
         self.sample_rate = sample_rate
         self.delay_lines = delay_lines
@@ -403,57 +403,39 @@ class MultiInstrumentFeedbackDelayReverb(nn.DictLayer):
         )
         self._early_ir = tfkl.Embedding(
             self.n_instruments, early_ir_length,
-            embeddings_initializer=general_initializer
+            embeddings_initializer=general_initializer,
+            embeddings_regularizer=tf.keras.regularizers.L1(1e-1)
         )
-        self.reverb_model = DelayNetwork(trainable=False,
-                                         freq_points=self.sample_rate * 2,
-                                         sampling_rate=self.sample_rate)
+        self.reverb_model = FeedbackDelayNetwork(trainable=False,
+                                                 sampling_rate=self.sample_rate)
 
     def build(self, input_shape):
         super().build(input_shape)
-        batch_size = input_shape[0]
+        self.reverb_model.trainable = False
         self.reverb_model.build(input_shape)
-        self._input_gain.build((batch_size,))
-        self._output_gain.build((batch_size,))
-        self._gain_allpass.build((batch_size,))
-        self._delays_allpass.build((batch_size,))
-        self._time_rev_0_sec.build((batch_size,))
-        self._alpha_tone.build((batch_size,))
-        self._early_ir.build((batch_size,))
 
     def reshape_embedding(self, embedding, splits=4):
         splitted = tf.split(embedding, splits, axis=-1)
         return tf.stack(splitted, axis=-1)
 
-    def call(self, piano_model, training=False) -> ['reverb_ir']:
+    def call(self, piano_model) -> ['reverb_ir']:
         if self.n_instruments == 1:
             piano_model = tf.zeros_like(piano_model, dtype=tf.int32)
         piano_model = piano_model[..., 0]
-        batch_size  = piano_model.shape[0]
-        
-        early_ir       = self._early_ir(piano_model, training=training)
-        input_gain     = self._input_gain(piano_model, training=training)
-        output_gain    = self._output_gain(piano_model, training=training)
-        gain_allpass   = self.reshape_embedding(self._gain_allpass(piano_model, training=training))
-        delays_allpass = self.reshape_embedding(self._delays_allpass(piano_model, training=training))
-        time_rev_0_sec = tf.nn.relu(self._time_rev_0_sec(piano_model, training=training))
-        alpha_tone     = tf.math.sigmoid(self._alpha_tone(piano_model, training=training))
-
-        ir = tf.TensorArray(tf.float32, size=batch_size)
-        for b in tf.range(batch_size):
-            ir = ir.write(b, self.reverb_model.get_ir(
-                **self.reverb_model.get_controls(
-                    audio_dry=None,
-                    early_ir=early_ir[b],
-                    input_gain=input_gain[b],
-                    output_gain=output_gain[b],
-                    gain_allpass=gain_allpass[b],
-                    delays_allpass=delays_allpass[b],
-                    time_rev_0_sec=time_rev_0_sec[b],
-                    alpha_tone=alpha_tone[b],
-                )))
-        return ir.stack()
-
+        controls_dict = {
+            'input_gain': self._input_gain(piano_model),
+            'output_gain': self._output_gain(piano_model),
+            'gain_allpass': self.reshape_embedding(self._gain_allpass(piano_model)),
+            'delays_allpass': self.reshape_embedding(self._delays_allpass(piano_model)),
+            'time_rev_0_sec': tf.nn.relu(self._time_rev_0_sec(piano_model)),
+            'alpha_tone': tf.math.sigmoid(self._alpha_tone(piano_model)),
+            'early_ir': self._early_ir(piano_model),
+        }
+        ir = tf.vectorized_map(lambda x: self.reverb_model.get_ir(**x),
+                               elems=controls_dict,
+                               # fn_output_signature=tf.float32
+                               )
+        return ir
 
 # -----------------------------------------------------------------------------
 # Monophonic amplitude models
@@ -906,10 +888,8 @@ class DeepInharmonicity(nn.DictLayer):
     def __init__(self, ch=32, n_layers=4, name="inharmonicity_net", **kwargs):
         super(DeepInharmonicity, self).__init__(**kwargs)
         self.hidden_layers = nn.FcStack(ch, n_layers - 1)
-        self.scale_layer = tfkl.Dense(ch, activation=partial(core.exp_sigmoid, max_value=1.))
+        self.scale_layer = tfkl.Dense(ch, activation=partial(exp_sigmoid, max_value=1.))
         self.out_layer = tfkl.Dense(1, activation=lambda x: x / 1000.)
-
-        self.model = tf.keras.Sequential(layers=layers)
 
     def call(self, extended_pitch, global_inharm=None) -> ['inharm_coef']:
         inharm_coef = self.hidden_layers(extended_pitch / 128.)

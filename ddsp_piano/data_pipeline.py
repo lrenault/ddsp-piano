@@ -283,10 +283,10 @@ def single_track_dataset(midi_filename,
     )
     # Split track into multiple segments
     if len(conditioning) / float(frame_rate) > duration:
-        audio = io_utils.split_sequence_tf(audio, duration, sample_rate)
+        audio        = io_utils.split_sequence_tf(audio, duration, sample_rate)
         conditioning = io_utils.split_sequence_tf(conditioning, duration, frame_rate)
-        pedal = io_utils.split_sequence_tf(pedal, duration, frame_rate)
-        polyphony = io_utils.split_sequence_tf(polyphony, duration, frame_rate)
+        pedal        = io_utils.split_sequence_tf(pedal, duration, frame_rate)
+        polyphony    = io_utils.split_sequence_tf(polyphony, duration, frame_rate)
 
         n_segments = min(len(audio), len(conditioning))
 
@@ -325,11 +325,9 @@ def single_track_dataset(midi_filename,
             "conditioning": tf.TensorShape([int(duration * frame_rate), 16, 2]),
             "pedal": tf.TensorShape([int(duration * frame_rate), 4]),
             "polyphony": tf.TensorShape([int(duration * frame_rate), ]),
-            "piano_model": tf.TensorShape([1, ]),
-        })
-    # Drop batch if dataset exhausted
-    dataset = dataset.filter(
-        lambda sample: tf.equal(batch_size, tf.shape(sample['audio'])[0]))
+            "piano_model": tf.TensorShape([1, ])},
+        drop_remainder=True
+    )
     # Prefetch
     dataset = dataset.prefetch(4)
 

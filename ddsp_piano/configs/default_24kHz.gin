@@ -73,11 +73,15 @@ context_net/layers.GRU:
 
 # Monophonic network
 PianoModel.monophonic_network = @sub_modules.MonophonicNetwork()
-MonophonicNetwork.name = 'mono_net'
-MonophonicNetwork.layers = [@mono_net/dense1/layers.Dense(),
-                            @mono_net/layers.GRU(),
-                            @mono_net/dense2/layers.Dense(),
-                            @mono_net/nn.Normalize()]
+MonophonicNetwork:
+    name = 'mono_net'
+    layers = [@mono_net/dense1/layers.Dense(),
+              @mono_net/layers.GRU(),
+              @mono_net/dense2/layers.Dense(),
+              @mono_net/nn.Normalize()]
+    output_splits = (('amplitudes', 1),
+                     ('harmonic_distribution', 128),
+                     ('magnitudes', 96))
 mono_net/dense1/layers.Dense:
     units = 128
     activation = @tf.nn.leaky_relu

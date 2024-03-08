@@ -225,7 +225,7 @@ def ensure_sequence_length(sequence, length, right=True):
 @tf.function
 def split_sequence_tf(x, segment_duration, rate, overlap=0.5):
     n_samples = int(segment_duration * rate)
-    hop_size = int(n_samples * (1 - overlap))
+    hop_size  = int(n_samples * (1 - overlap))
 
     segments = tf.TensorArray(dtype=x.dtype, size=1, dynamic_size=True)
 
@@ -233,11 +233,11 @@ def split_sequence_tf(x, segment_duration, rate, overlap=0.5):
     while timestep + n_samples <= tf.shape(x)[0]:
         segments = segments.write(segment_idx,
                                   x[timestep: timestep + n_samples, ...])
-        # segment = ensure_sequence_length(segment, n_samples)
         timestep += hop_size
         segment_idx += 1
-    segments = segments.stack()
-    return segments
+    stacked_segments = segments.stack()
+    _ = segments.close()
+    return stacked_segments
 
 
 def collect_garbage():
