@@ -119,7 +119,7 @@ PianoModel.reverb_model = @sub_modules.MultiInstrumentFeedbackDelayReverb()
 MultiInstrumentFeedbackDelayReverb:
     n_instruments = %n_instruments
     sample_rate   = %sample_rate
-    regularize_early = True
+    regularize_early = False
 
 # Context network
 PianoModel.context_network = @sub_modules.FiLMContextNetwork()

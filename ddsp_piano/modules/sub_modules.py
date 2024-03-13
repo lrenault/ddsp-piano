@@ -366,7 +366,7 @@ class MultiInstrumentFeedbackDelayReverb(nn.DictLayer):
         - reverb_length (int): number of samples for each impulse response.
     """
     def __init__(self, n_instruments=10, sample_rate=16000, delay_lines=8,
-                 early_ir_length=200,
+                 early_ir_length=200, regularize_early=False,
                  **kwargs):
         super().__init__(**kwargs)
         self.n_instruments = n_instruments
@@ -404,7 +404,7 @@ class MultiInstrumentFeedbackDelayReverb(nn.DictLayer):
         self._early_ir = tfkl.Embedding(
             self.n_instruments, early_ir_length,
             embeddings_initializer=general_initializer,
-            embeddings_regularizer=tf.keras.regularizers.L1(1e-1)
+            embeddings_regularizer=tf.keras.regularizers.L1(1e-1) if regularize_early else None
         )
         self.reverb_model = FeedbackDelayNetwork(trainable=False,
                                                  sampling_rate=self.sample_rate)
