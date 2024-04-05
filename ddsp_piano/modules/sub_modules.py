@@ -492,8 +492,8 @@ class MonophonicDeepNetwork(MonophonicNetwork):
     """Monophonic network using the same architecture as the original DDSP
     decoder MLP layers."""
     def __init__(self,
-                 rnn_channels=256,
-                 ch=256,
+                 rnn_channels=256,#192
+                 ch=256,#64
                  layers_per_stack=3,
                  **kwargs):
         super().__init__(layers=nn.Rnn(rnn_channels, 'gru'), **kwargs)

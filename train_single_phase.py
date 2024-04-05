@@ -92,7 +92,7 @@ def validation_step(trainer, inputs):
     outputs, losses = trainer.run(
         tf.function(trainer.model.__call__),
         batch,
-        training=True,
+        training=False,
         return_losses=True
     )
     # Add up the scalar losses across replicas.

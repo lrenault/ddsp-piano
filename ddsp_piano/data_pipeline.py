@@ -52,10 +52,11 @@ def get_validation_dataset(*args, **kwargs):
                        **kwargs)
 
 
-def get_test_dataset(*args, duration=30, **kwargs):
+def get_test_dataset(*args, duration=10, overlap=0., **kwargs):
     return get_dataset(*args,
                        split='test',
                        duration=duration,
+                       overlap=overlap,
                        filter_over_polyphony=False,
                        infinite_generator=False,
                        shuffle=False,
@@ -119,6 +120,7 @@ def get_dataset(filename,
                 split='train',
                 year=None,
                 duration=3,
+                overlap=0.5,
                 batch_size=6,
                 shuffle=True,
                 infinite_generator=True,
@@ -184,10 +186,10 @@ def get_dataset(filename,
     dataset = dataset.map(
         lambda x: dict(
             x,
-            audio=io_utils.split_sequence_tf(x['audio'], duration, sample_rate),
-            conditioning=io_utils.split_sequence_tf(x['conditioning'], duration, frame_rate),
-            pedal=io_utils.split_sequence_tf(x['pedal'], duration, frame_rate),
-            polyphony=io_utils.split_sequence_tf(x['polyphony'], duration, frame_rate)),
+            audio=io_utils.split_sequence_tf(x['audio'], duration, sample_rate, overlap=overlap),
+            conditioning=io_utils.split_sequence_tf(x['conditioning'], duration, frame_rate, overlap=overlap),
+            pedal=io_utils.split_sequence_tf(x['pedal'], duration, frame_rate, overlap=overlap),
+            polyphony=io_utils.split_sequence_tf(x['polyphony'], duration, frame_rate, overlap=overlap)),
         num_parallel_calls=num_parallel_calls)
 
     # Fix border issue
@@ -216,6 +218,15 @@ def get_dataset(filename,
             piano_model=tf.data.Dataset.from_tensor_slices(
                 tf.repeat(sample["piano_model"],
                           repeats=sample["n_segments"])[..., tf.newaxis]
+            ),
+            filename=tf.data.Dataset.from_tensor_slices(
+                tf.strings.join([
+                    tf.repeat(
+                        sample["audio_filename"] + "_",
+                        repeats=sample["n_segments"]
+                    ),
+                    tf.as_string(tf.range(sample["n_segments"], dtype=tf.int32))
+                ])[..., tf.newaxis]
             )
         ))
     )
@@ -229,7 +240,8 @@ def get_dataset(filename,
         lambda x: {k: x[k] for k in ['audio',
                                      'conditioning',
                                      'pedal',
-                                     'piano_model']},
+                                     'piano_model',
+                                     'filename']},
         num_parallel_calls=num_parallel_calls)
 
     # Infinite generator
@@ -242,7 +254,8 @@ def get_dataset(filename,
         padded_shapes={"conditioning": tf.TensorShape(conditioning_shape),
                        "pedal": tf.TensorShape(pedal_shape),
                        "audio": tf.TensorShape(audio_shape),
-                       "piano_model": tf.TensorShape(piano_model_shape)},
+                       "piano_model": tf.TensorShape(piano_model_shape),
+                       "filename": tf.TensorShape([1, ])},
         drop_remainder=True
     )
     # Prefetch next batches
@@ -352,3 +365,17 @@ def preprocess_data_into_tfrecord(filename, **kwargs):
     ``` """
     dataset = get_preprocessed_dataset(**kwargs)
     dataset.save(filename)
+
+if __name__ == "__main__":
+    # Test the pipeline
+    dataset = get_test_dataset(
+        filename="/data3/anasynth_nonbp/renault/audio_database/maestro-v3.0.0/",
+        batch_size=1,
+        sample_rate=24000,
+        frame_rate=250)
+    
+    for batch in dataset.take(1):
+        print(batch)
+        break
+    print("Pipeline test passed.")
+    import pdb; pdb.set_trace()

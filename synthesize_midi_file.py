@@ -14,7 +14,7 @@ def process_args():
     parser.add_argument('--config', '-c', type=str, help="A .gin model config",
                         default='ddsp_piano/configs/default.gin')
     parser.add_argument('--ckpt', type=str, help="Model checkpoint to load.",
-                        default='ddsp_piano/model_weights/ckpt-0')
+                        default='ddsp_piano/model_weights/default_dafx22/ckpt-0')
     parser.add_argument('--piano_type', type=int, default=3,
                         help="Piano model (from 0 to 9).\
                               (default: %(default)s)")
