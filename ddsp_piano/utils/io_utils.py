@@ -52,10 +52,11 @@ def load_audio_as_signal(audio_path, sample_rate=16000):
     In order to not use/install apache-beam, we've copied the function from
     ddsp.training.data_preparation.prepare_tfrecord_lib._load_audio_as_array
     Args:
-        audio_path: path to audio file
-        sample_rate: desired sample rate (can be different from original SR)
+        audio_path (path): path to audio file.
+        sample_rate (int): desired sample rate (can be different from
+        original sample rate).
     Returns:
-        audio: audio in np.float32
+        audio (n_samples,): audio in np.float32.
     """
     with tf.io.gfile.GFile(decode_tfstring(audio_path), 'rb') as f:
         # Load audio at original SR
@@ -92,6 +93,7 @@ def load_midi_as_conditioning(mid_path,
         - n_synths (int): number of polyphonoic channels in the conditioning.
         - frame_rate (int): number of frames per second.
         - duration (float): crop file reading to this duration.
+        - warm_up_duration (float): zero-pad for this amount of time at beginning
     Returns:
         - conditioning (1, n_frames, n_synths, 2): polyphonic note activity and
         onset inputs.
@@ -127,7 +129,7 @@ def load_midi_as_conditioning(mid_path,
     if warm_up_duration > 0.:
         n_frames = target_n_frames + int(warm_up_duration * frame_rate)
         conditioning = ensure_sequence_length(conditioning, n_frames, right=False)
-        pedals       = ensure_sequence_length(pedals, n_frames, right=False)
+        pedals       = ensure_sequence_length(pedals,       n_frames, right=False)
 
     # Return with a batch size of 1
     return {'conditioning': conditioning[np.newaxis, ...],
@@ -238,6 +240,17 @@ def split_sequence_tf(x, segment_duration, rate, overlap=0.5):
     stacked_segments = segments.stack()
     _ = segments.close()
     return stacked_segments
+
+
+def normalize_audio(audio_file, volume=-20):
+    """Normalize audio to a given volume level.
+    Args:
+        - audio_file (str): path to audio file.
+        - volume (float): desired volume level in dBFS.
+    """
+    audio = pydub.AudioSegment.from_file(audio_file, "wav")
+    normalized_audio = audio.apply_gain(volume - audio.dBFS)
+    normalized_audio.export(audio_file, format='wav')
 
 
 def collect_garbage():

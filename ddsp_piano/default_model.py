@@ -11,9 +11,9 @@ tfkl = tf.keras.layers
 # ===========
 # This config script is deprecated in favor of gin-config files.
 # This file is kept for legacy purpose (as it corresponds to the model version
-# of the paper) and can serve as an example of configuring a model without gin.
+# of the paper) and can serve as an example for configuring a model without gin.
 # 
-# The .gin equivalent to this model is located in ddsp_piano/configs/default.gin
+# The .gin equivalent to this model is located at ddsp_piano/configs/dafx22.gin
 # ===========
 
 
@@ -108,7 +108,6 @@ def get_model(inference=False,
         n_instruments=n_piano_models,
         reverb_duration=reverb_duration,
         sample_rate=sample_rate,
-        # reverb_length=int(reverb_duration * sample_rate)
     )
     # Neural modules
     context_network = sub_modules.ContextNetwork(

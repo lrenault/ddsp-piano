@@ -228,10 +228,9 @@ def get_model(inference=False,
     context_network = sub_modules.ContextNetwork(
         name='context_net',
         normalize_pitch=True,
-        layers=[# tfkl.Dense(16, activation=tf.nn.leaky_relu),  # 32
-                # tfkl.GRU(16, return_sequences=True),  # 64
-                # Normalize('layer'),
-                tfkl.Lambda(lambda x: x),
+        layers=[tfkl.Dense(16, activation=tf.nn.leaky_relu),  # 32
+                tfkl.GRU(16, return_sequences=True),  # 64
+                Normalize('layer'),
                 ]
     )
     monophonic_network = sub_modules.MonophonicNetwork(
@@ -240,8 +239,6 @@ def get_model(inference=False,
                 Normalize('layer'),
                 tfkl.GRU(128, return_sequences=True),
                 tfkl.Dense(128, activation=tf.nn.leaky_relu),
-                # Normalize('layer'),
-                # tfkl.GRU(128, return_sequences=True)
                 ],
         output_splits=(('amplitudes', 1),
                        ('harmonic_distribution', 96),

@@ -1,11 +1,13 @@
 import argparse
 import gin
+from ddsp.training import trainers, train_util
 from ddsp.training.models import get_model
 from ddsp_piano.data_pipeline import get_dummy_data
 
+
 if __name__ == "__main__":
 	parser = argparse.ArgumentParser()
-	parser.add_argument('config')
+	parser.add_argument('config', help="A .gin config file to test.")
 	args = parser.parse_args()
 
 	gin.parse_config_file(args.config)
@@ -16,7 +18,6 @@ if __name__ == "__main__":
 	model.summary()
 	print(model.inharm_model.beta_t.get_weights())
 
-	from ddsp.training import trainers, train_util
 	strategy = train_util.get_strategy()
 	with strategy.scope():
 		model = get_model()

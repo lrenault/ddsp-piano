@@ -11,9 +11,9 @@ def polyphonic_dag(additive, noise, reverb=None,
     """Return a polyphonic DAG for a Processor Group.
     Args:
         - additive (ddsp.processors.Processor): a Harmonic synthesizer
+        - noise (ddsp.processors.Processor): filtered noise synthesizer.
         - additive_controls (list): list of associated monophonic controls.
-        - noise (ddsp.processors.Processor): filtered noise synthesizer
-        - noise_controls (list) list of associated monophonic controls.
+        - noise_controls (list): list monophonic controls keys associated with the noise.
         - reverb (ddsp.processors.Processor): optional reverb model
         - reverb_controls (list): list of reverb control keys.
         - n_synths (int): polyphonic capacity.
@@ -40,8 +40,3 @@ def polyphonic_dag(additive, noise, reverb=None,
         dag.append((reverb, ['add/signal'] + reverb_controls))
 
     return dag
-
-
-if __name__ == '__main__':
-    dag = build_polyphonic_dag('additive_test', 'noise_test')
-    import pdb; pdb.set_trace()

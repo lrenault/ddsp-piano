@@ -13,7 +13,8 @@ tfkl = tf.keras.layers
 
 
 class FilterBank(tfkl.Layer):
-    """Tensorflow adaptation of https://github.com/adrianbarahona/noisebandnet/blob/master/noisebandnet/filterbank.py
+    """Tensorflow adaptation of
+    https://github.com/adrianbarahona/noisebandnet/blob/master/noisebandnet/filterbank.py
     Filterbank class that builds a filterbank with linearly and logarithmically
     distributed filters.
     Args:
@@ -35,12 +36,15 @@ class FilterBank(tfkl.Layer):
             n_filters_log=n_filters_log,
             linear_min_f=linear_min_f,
             linear_max_f_cutoff_fs=linear_max_f_cutoff_fs,
-            sample_rate=sample_rate)
+            sample_rate=sample_rate
+        )
         self.band_centers = self.get_band_centers(frequency_bands=frequency_bands,
                                                   sample_rate=sample_rate)
+
         self.filters = self.build_filterbank(frequency_bands=frequency_bands,
                                              sample_rate=sample_rate,
                                              attenuation=attenuation)
+
         self.max_filter_len = max(len(array) for array in self.filters)
 
     def get_linear_bands(self, n_filters_linear, linear_min_f, linear_max_f_cutoff_fs, sample_rate):
@@ -51,12 +55,16 @@ class FilterBank(tfkl.Layer):
 
     def get_log_bands(self, n_filters_log, linear_max_f_cutoff_fs, sample_rate):
         linear_max_f = (sample_rate / 2) / linear_max_f_cutoff_fs
-        log_bands = np.geomspace(start=linear_max_f, stop=sample_rate/2,
-                                 num=n_filters_log, endpoint=False)
-        log_bands = np.vstack((log_bands[:-1], log_bands[1:])).T
+        log_bands    = np.geomspace(start=linear_max_f,
+                                    stop=sample_rate/2,
+                                    num=n_filters_log,
+                                    endpoint=False)
+        log_bands    = np.vstack((log_bands[:-1], log_bands[1:])).T
         return log_bands
 
-    def get_frequency_bands(self, n_filters_linear, n_filters_log, linear_min_f, linear_max_f_cutoff_fs,  sample_rate):
+    def get_frequency_bands(self, n_filters_linear, n_filters_log,
+                            linear_min_f, linear_max_f_cutoff_fs,
+                            sample_rate):
         linear_bands = self.get_linear_bands(n_filters_linear=n_filters_linear,
                                              linear_min_f=linear_min_f,
                                              linear_max_f_cutoff_fs=linear_max_f_cutoff_fs,
@@ -76,7 +84,7 @@ class FilterBank(tfkl.Layer):
 
     def get_filter(self, cutoff, sample_rate, attenuation, pass_zero, transition_bandwidth=0.2, scale=True):
         if isinstance(cutoff, np.ndarray): #BPF
-            bandwidth = abs(cutoff[1]-cutoff[0])
+            bandwidth = abs(cutoff[1] - cutoff[0])
         elif pass_zero==True: #LPF
             bandwidth = cutoff
         elif pass_zero==False: #HPF
@@ -134,15 +142,15 @@ class NoiseBandNetSynth(processors.Processor):
                  scale_fn=core.exp_sigmoid, inference=False, name="noise", **kwargs):
         super().__init__(name=name, **kwargs)
         assert min_noise_len > 0 and isinstance(min_noise_len, int) and check_power_of_2(min_noise_len), "min_noise_len must be a positive integer and a power of 2"
-        self.scale_fn = scale_fn
-        self.upsampling = upsampling
-        self.sample_rate = sample_rate
-        self.linear_min_f = linear_min_f
+        self.scale_fn               = scale_fn
+        self.upsampling             = upsampling
+        self.sample_rate            = sample_rate
+        self.linear_min_f           = linear_min_f
         self.linear_max_f_cutoff_fs = linear_max_f_cutoff_fs
-        self.filterbank_attenuation=filterbank_attenuation
-        self.min_noise_len = min_noise_len
-        self.normalize_noise_bands = normalize_noise_bands
-        self.inference = inference
+        self.filterbank_attenuation = filterbank_attenuation
+        self.min_noise_len          = min_noise_len
+        self.normalize_noise_bands  = normalize_noise_bands
+        self.inference              = inference
 
     def build(self, input_shape):
         self.n_band = input_shape[-1]
@@ -156,7 +164,9 @@ class NoiseBandNetSynth(processors.Processor):
         self.center_frequencies = fb.band_centers
         self.noise_bands, self.noise_len = get_noise_bands(
             fb=fb, min_noise_len=self.min_noise_len,
-            normalize=self.normalize_noise_bands)
+            normalize=self.normalize_noise_bands
+        )
+        super().build(input_shape)
 
     def get_controls(self, magnitudes):
         if self.scale_fn is not None:
@@ -166,16 +176,17 @@ class NoiseBandNetSynth(processors.Processor):
     def get_signal(self, amplitudes):
         # Synth in noise_len frames to fit longer sequences on GPU memory
         frame_len = int(self.noise_len / self.upsampling)
-        n_frames = math.ceil(amplitudes.shape[1] / frame_len)
+        n_frames  = math.ceil(amplitudes.shape[1] / frame_len)
 
         # Avoid overfitting to noise values
         noise_bands = tf.roll(
-            self.noise_bands, axis=1,
+            self.noise_bands,
+            axis=1,
             shift=tf.random.uniform(shape=(),
                                     minval=0,
                                     maxval=self.noise_bands.shape[1],
-                                    dtype=tf.int32))
-
+                                    dtype=tf.int32)
+        )
         n_samples = amplitudes.shape[1] * self.upsampling
         # Smaller amp len than noise_len
         if amplitudes.shape[1] / frame_len < 1:

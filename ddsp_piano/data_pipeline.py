@@ -87,8 +87,6 @@ def get_preprocessed_dataset(dataset_dir,
     # Init tf.dataset from .csv file
     dataset, n_examples, piano_models = io_utils.dataset_from_csv(
         join(dataset_dir, "maestro-v3.0.0.csv"),
-        # join(dataset_dir, "maps_MUS_dataset.csv"),
-        # join(dataset_dir, "mel2mel_MUS_dataset.csv"),
         split=split,
         year=year,
         **kwargs
@@ -275,6 +273,7 @@ def single_track_dataset(midi_filename,
                          duration=3,
                          sample_rate=16000,
                          frame_rate=250,
+                         max_polyphony=16,
                          num_parallel_calls=8):
     """Create a training dataset from a single pair of audio/midi track.
     Args:
@@ -284,13 +283,14 @@ def single_track_dataset(midi_filename,
         - duration (int): duration of segments (in s).
         - sample_rate (int): audio sample rate.
         - frame_rate (int): conditioning frame rate.
+        - max_polyphony (int): maximum number of simultaneous notes.
         - num_parallel_calls (int): number of tf.data.Dataset theads.
     """
     # Load audio and MIDI data
     audio, conditioning, pedal, polyphony = io_utils.load_data(
         audio_filename,
         midi_filename,
-        max_polyphony=16,
+        max_polyphony=max_polyphony,
         sample_rate=sample_rate,
         frame_rate=frame_rate,
     )
@@ -311,8 +311,7 @@ def single_track_dataset(midi_filename,
         for k in dataset.keys():
             dataset[k] = dataset[k][:n_segments]
 
-    else:
-        # Single segment available
+    else:  # Single segment available
         dataset = {"audio": [io_utils.ensure_sequence_length(audio, int(duration * sample_rate)), ],
                    "conditioning": [io_utils.ensure_sequence_length(conditioning, int(duration * frame_rate)), ],
                    "pedal": [io_utils.ensure_sequence_length(pedal, int(duration * frame_rate)), ],
@@ -323,7 +322,7 @@ def single_track_dataset(midi_filename,
 
     # Filter out segments with polyphony exceedings polyphonic capacity
     dataset = dataset.filter(
-        lambda sample: tf.reduce_max(sample["polyphony"]) <= 16)
+        lambda sample: tf.reduce_max(sample["polyphony"]) <= max_polyphony)
     # Add piano model
     dataset = dataset.map(
         lambda sample: dict(
@@ -334,11 +333,11 @@ def single_track_dataset(midi_filename,
     dataset = dataset.padded_batch(
         batch_size,
         padded_shapes={
-            "audio": tf.TensorShape([int(duration * sample_rate), ]),
+            "audio":        tf.TensorShape([int(duration * sample_rate), ]),
             "conditioning": tf.TensorShape([int(duration * frame_rate), 16, 2]),
-            "pedal": tf.TensorShape([int(duration * frame_rate), 4]),
-            "polyphony": tf.TensorShape([int(duration * frame_rate), ]),
-            "piano_model": tf.TensorShape([1, ])},
+            "pedal":        tf.TensorShape([int(duration * frame_rate), 4]),
+            "polyphony":    tf.TensorShape([int(duration * frame_rate), ]),
+            "piano_model":  tf.TensorShape([1, ])},
         drop_remainder=True
     )
     # Prefetch
@@ -365,17 +364,3 @@ def preprocess_data_into_tfrecord(filename, **kwargs):
     ``` """
     dataset = get_preprocessed_dataset(**kwargs)
     dataset.save(filename)
-
-if __name__ == "__main__":
-    # Test the pipeline
-    dataset = get_test_dataset(
-        filename="/data3/anasynth_nonbp/renault/audio_database/maestro-v3.0.0/",
-        batch_size=1,
-        sample_rate=24000,
-        frame_rate=250)
-    
-    for batch in dataset.take(1):
-        print(batch)
-        break
-    print("Pipeline test passed.")
-    import pdb; pdb.set_trace()

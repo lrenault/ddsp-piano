@@ -21,7 +21,7 @@ def tf_complex64(x):
 class FeedbackDelayNetwork(processors.Processor):
     """Differentiable Feedback Delay Network reverb.
     Simplified from https://github.com/phvial/priv-ddfx/blob/main/effects.py
-    (credits: Pierre-Hugo Vial, 2023, AQUA-RIUS project).
+    (credits: Pierre-Hugo Vial, 2023, AQUA-RIUS ANR project).
     Fixed config:
     - decorrelator: allpass
     - mixing_matrix_style: Householder
@@ -220,11 +220,11 @@ class FeedbackDelayNetwork(processors.Processor):
         if len(output_gain.shape) == 1:
             output_gain = tf.expand_dims(output_gain, axis=0)
             output_gain = tf.expand_dims(output_gain, axis=0)
-            output_gain = tf.tile(output_gain, [self.freq_points // 2 + 1, 1, 1])
+            output_gain = tf.tile(output_gain,     [self.freq_points // 2 + 1, 1, 1])
         if len(input_gain.shape) == 1:
             input_gain = tf.expand_dims(input_gain, axis=1)
             input_gain = tf.expand_dims(input_gain, axis=0)
-            input_gain = tf.tile(input_gain, [self.freq_points // 2 + 1, 1, 1])
+            input_gain = tf.tile(input_gain,       [self.freq_points // 2 + 1, 1, 1])
         eye_mat = tf.eye(
             mixing_matrix.shape[-1],
             batch_shape=[self.freq_points // 2 + 1],
@@ -243,7 +243,7 @@ class FeedbackDelayNetwork(processors.Processor):
             [
                 tf.exp(
                     -1j * wk * tf_complex64(tf.floor(self.delay_values[d]))
-                )  # modif: ajout de tf floor
+                )
                 for d in range(self.delay_lines)
             ],
             axis=1,
@@ -258,10 +258,10 @@ class FeedbackDelayNetwork(processors.Processor):
                 for d in range(self.delay_lines)
             ],
             axis=1,
-        )  # 
+        )
 
-        # diag_delay_matrix = tf.linalg.diag(z_d)
-        diag_delay_matrix = tf.linalg.diag(z_d * allpass_interp)  # 
+        diag_delay_matrix = tf.linalg.diag(z_d * allpass_interp)
+
         delay_sec = (
             tf_float32(self.delay_values)
             + tf.reduce_sum(delays_allpass, axis=-1)  # ajout tf_float32
@@ -279,13 +279,8 @@ class FeedbackDelayNetwork(processors.Processor):
         p = (k - kpi) / (k + kpi)
 
         # shape[freq_points//2+1, delay_lines]
-        # g_tiled = tf_complex64(tf.tile(g, [self.freq_points // 2 + 1, 1]))
-        # p_tiled = tf_complex64(tf.tile(p, [self.freq_points // 2 + 1, 1]))
         g_tiled = tf_complex64(tf.repeat(g, self.freq_points // 2 + 1, axis=0))
         p_tiled = tf_complex64(tf.repeat(p, self.freq_points // 2 + 1, axis=0))
-        # z_tiled = tf.stack(
-        #     [tf.exp(-1j * wk) for d in range(self.delay_lines)], axis=-1
-        # )  # shape[freq_points//2+1, delay_lines]
         z_tiled = tf.exp(-1j * wk)
         for _ in range(len(g_tiled.shape) - 1): z_tiled = z_tiled[..., tf.newaxis]
         self.sampled_transfers = tf.transpose(
@@ -294,20 +289,14 @@ class FeedbackDelayNetwork(processors.Processor):
         filter_matrix = tf.linalg.diag(g_tiled / (1 - p_tiled * z_tiled + 1e-8))
 
         gain_allpass = tf_complex64(tf.expand_dims(gain_allpass, axis=0))
-        # gain_allpass_tiled = tf.tile(gain_allpass, [self.freq_points // 2 + 1, 1, 1])
         gain_allpass_tiled = tf.repeat(gain_allpass, self.freq_points // 2 + 1, axis=0)
     
         delays_allpass = tf_complex64(tf.expand_dims(delays_allpass, axis=0))
         delays_allpass_tiled = tf.repeat(delays_allpass, self.freq_points // 2 + 1, axis=0)
-        # delays_allpass_tiled = tf.tile(
-        #     delays_allpass, [self.freq_points // 2 + 1, 1, 1]
-        # )
-        wk_tiled = wk# [:, tf.newaxis, tf.newaxis]
+        wk_tiled = wk  # shape[:, tf.newaxis, tf.newaxis]
         for _ in range(len(delays_allpass_tiled.shape) - 1):
             wk_tiled = wk_tiled[..., tf.newaxis]
-        # wk_tiled = tf.tile(
-        #     wk_tiled, [1, self.delay_lines, delays_allpass_tiled.shape[2]]
-        # )
+
         z_delays = tf.exp(1j * wk_tiled * delays_allpass_tiled)  
     
         # transfer function of allpass filters
@@ -416,7 +405,6 @@ class FeedbackDelayNetwork(processors.Processor):
         return {'audio': audio_dry, 'ir': ir}
 
     def get_signal(self, audio: tf.Tensor, ir: tf.Tensor) -> tf.Tensor:
-        # ir = tf.expand_dims(self.get_ir(**kwargs), axis=0)
         ir = tf.expand_dims(ir, axis=0)
         audio_out = fft_convolve(audio, ir, delay_compensation=0)
         return audio_out

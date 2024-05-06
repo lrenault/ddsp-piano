@@ -7,8 +7,7 @@ from tqdm import tqdm
 from soundfile import write
 from ddsp.training import trainers, train_util
 from ddsp.training.models import get_model
-from ddsp_piano.data_pipeline import get_dummy_data
-from ddsp_piano.data_pipeline import get_test_dataset
+from ddsp_piano.data_pipeline import get_dummy_data, get_test_dataset
 
 osjoin = os.path.join
 

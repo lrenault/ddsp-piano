@@ -45,19 +45,19 @@ class PianoModel(Model):
                  losses=None,
                  **kwargs):
         super(PianoModel, self).__init__(**kwargs)
-        self.z_encoder = z_encoder
-        self.note_release = note_release
-        self.context_network = context_network
-        self.parallelizer = parallelizer
-        self.monophonic_network = monophonic_network
-        self.surrogate_module = surrogate_module
-        self.inharm_model = inharm_model
-        self.detuner = detuner
-        self.harmonic_masking = harmonic_masking
+        self.z_encoder              = z_encoder
+        self.note_release           = note_release
+        self.context_network        = context_network
+        self.parallelizer           = parallelizer
+        self.monophonic_network     = monophonic_network
+        self.surrogate_module       = surrogate_module
+        self.inharm_model           = inharm_model
+        self.detuner                = detuner
+        self.harmonic_masking       = harmonic_masking
         self.background_noise_model = background_noise_model
-        self.reverb_model = reverb_model
-        self.processor_group = processor_group
-        self.ddsp_synths = ddsp_synths
+        self.reverb_model           = reverb_model
+        self.processor_group        = processor_group
+        self.ddsp_synths            = ddsp_synths
 
         self.loss_objs = ddsp.core.make_iterable(losses)
 

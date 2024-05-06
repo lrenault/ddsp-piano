@@ -6,24 +6,27 @@ from soundfile import write
 from ddsp.training import trainers, train_util
 from ddsp.training.models import get_model
 from ddsp_piano.data_pipeline import get_dummy_data
-from ddsp_piano.utils.io_utils import load_midi_as_conditioning
+from ddsp_piano.utils.io_utils import load_midi_as_conditioning, normalize_audio
 
 
 def process_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--config', '-c', type=str, help="A .gin model config",
-                        default='ddsp_piano/configs/default.gin')
+    parser.add_argument('-c', '--config', type=str, help="A .gin model config.",
+                        default='ddsp_piano/configs/maestro-v2.gin')
     parser.add_argument('--ckpt', type=str, help="Model checkpoint to load.",
-                        default='ddsp_piano/model_weights/default_dafx22/ckpt-0')
-    parser.add_argument('--piano_type', type=int, default=3,
+                        default='ddsp_piano/model_weights/v2/')
+    parser.add_argument('--piano_type', type=int, default=9,
                         help="Piano model (from 0 to 9).\
                               (default: %(default)s)")
-    parser.add_argument('--warm_up', '-wu', type=float, default=0.5,
+    parser.add_argument('-wu', '--warm_up', type=float, default=0.5,
                         help="Warm-up duration (in s, default: %(default)s)")
-    parser.add_argument('--duration', '-d', type=float, default=None,
+    parser.add_argument('-d','--duration',  type=float, default=None,
                         help="Maximum duration of synthesized audio.\
                               (default: %(default)s)")
-    parser.add_argument('--unreverbed', '-u', action='store_false',
+    parser.add_argument('-n', '--normalize', type=float, default=None,
+                        help="Normalize audio to this amount of dBFS.\
+                              (default: %(default)s)")
+    parser.add_argument('-u', '--unreverbed', action='store_true',
                         help="Generate unreverbed audio.")
     parser.add_argument('midi_file', type=str,
                         help="Piano MIDI file to synthesize.")
@@ -72,12 +75,16 @@ def main(args):
     write(args.out_file,
           data=outs['audio_synth'][0, int(args.warm_up * model.sample_rate):].numpy(),
           samplerate=model.sample_rate)
+    if args.normalize:
+        normalize_audio(args.out_file, args.normalize)
 
     # Save dry audio (optional)
     if args.unreverbed:
         write(args.out_file + "_unreverbed.wav",
               data=outs['add']['signal'][0, int(args.warm_up * model.sample_rate):].numpy(),
               samplerate=model.sample_rate)
+        if args.normalize:
+            normalize_audio(args.out_file + "_unreverbed.wav", args.normalize)
 
     print(f"Audio saved at {args.out_file}.")
 
@@ -85,5 +92,4 @@ def main(args):
 if __name__ == "__main__":
     # Cannot put too long audio sequences on the GPU memory
     os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
-
     main(process_args())
