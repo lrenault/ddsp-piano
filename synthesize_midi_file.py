@@ -1,7 +1,7 @@
-import os
-import argparse
 import gin
+import argparse
 import tensorflow as tf
+from absl import logging
 from soundfile import write
 from ddsp.training import trainers, train_util
 from ddsp.training.models import get_model
@@ -27,7 +27,7 @@ def process_args():
                         help="Normalize audio to this amount of dBFS.\
                               (default: %(default)s)")
     parser.add_argument('-u', '--unreverbed', action='store_true',
-                        help="Generate unreverbed audio.")
+                        help="Also generates dry piano audio, without reverb.")
     parser.add_argument('midi_file', type=str,
                         help="Piano MIDI file to synthesize.")
     parser.add_argument('out_file', type=str,
@@ -37,14 +37,14 @@ def process_args():
 
 def main(args):
     # Load MIDI data
-    print("Loading midi file...")
+    logging.info("Loading midi file...")
     inputs = load_midi_as_conditioning(args.midi_file,
                                        duration=args.duration,
                                        warm_up_duration=args.warm_up)
     # Add piano model conditioning
     inputs['piano_model'] = tf.convert_to_tensor([[args.piano_type]])
 
-    print(f"Midi file loaded (with duration {inputs['duration'] - args.warm_up} s).\
+    logging.info(f"Midi file loaded (with duration {inputs['duration'] - args.warm_up} s).\
             \nNow building the piano synthesizer...")
 
     # Parse and override gin-config
@@ -62,13 +62,13 @@ def main(args):
                                      duration=inputs['duration'],
                                      sample_rate=model.sample_rate))
         # Restore model weight
-        print("Model built, now retrieving model weights...")
+        logging.info("Model built, now retrieving model weights...")
         # trainer.optimizer = tf.keras.optimizers.legacy.Adam()
         trainer.restore(args.ckpt)
 
     # Forward pass
-    print(f"Model weights loaded from {args.ckpt} \
-           \nNow synthesizing audio (this could take some time)...")
+    logging.info(f"Model weights loaded from {args.ckpt} \
+                 \nNow synthesizing audio (this could take some time)...")
     outs = model(inputs)
 
     # Save final audio
@@ -86,10 +86,9 @@ def main(args):
         if args.normalize:
             normalize_audio(args.out_file + "_unreverbed.wav", args.normalize)
 
-    print(f"Audio saved at {args.out_file}.")
+    logging.info(f"Audio saved at {args.out_file}.")
 
 
 if __name__ == "__main__":
-    # Cannot put too long audio sequences on the GPU memory
-    os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+    logging.set_verbosity(logging.INFO)
     main(process_args())

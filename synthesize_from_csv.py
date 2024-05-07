@@ -4,31 +4,34 @@ import gin
 import numpy as np
 import pandas as pd
 import tensorflow as tf
+from absl import logging
 from soundfile import write
 from ddsp.training import trainers, train_util
 from ddsp.training.models import get_model
 from ddsp_piano.data_pipeline import get_dummy_data
-from ddsp_piano.utils.io_utils import load_midi_as_conditioning
-
-from normalize_wav import main as normalize_audio
+from ddsp_piano.utils.io_utils import load_midi_as_conditioning, normalize_audio
 
 osjoin = os.path.join
-DATARD_PATH = os.environ['DATARD_PATH']
 
 
 def process_args():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description="Synthesize audio from MIDI files using a trained model.")
     parser.add_argument('--config', '-c', type=str, help="A .gin model config",
-                        default='ddsp_piano/configs/default.gin')
+                        default='ddsp_piano/configs/maestro-v2.gin')
     parser.add_argument('--ckpt', type=str, help="Model checkpoint to load.",
-                        default='ddsp_piano/model_weights/default_dafx22/ckpt-0')
+                        default='ddsp_piano/model_weights/v2/')
     parser.add_argument('--duration', '-d', type=float, default=10.0,
                         help="Maximum duration of synthesized audio.\
                               (default: %(default)s)")
     parser.add_argument('--warm_up', '-wu', type=float, default=0.5,
                         help="Warm-up duration (in s, default: %(default)s)")
+    parser.add_argument('-n', '--normalize', type=str, default=None,
+                        help="Normalize the output audio to the given level (dBFS).\
+                              (default: %(default)s)")
     parser.add_argument('--decompose', '-dc', action='store_true',
                         help="Generate isolated piano elements audio.")
+    parser.add_argument('maestro_dir', type=str,
+                        help="Path to the maestro dataset directory.")
     parser.add_argument('csv_file', type=str,
                         help=".csv file containing paths to MIDI to synthesize.")
     parser.add_argument('out_dir', type=str,
@@ -59,11 +62,9 @@ def main(args):
     os.makedirs(args.out_dir, exist_ok=True)
     for i, row in df.iterrows():
         # Load MIDI data
-        print(f"Loading file {row['mid_file']}")
+        logging.info(f"Loading file {row['mid_file']}")
         inputs = load_midi_as_conditioning(
-            osjoin(DATARD_PATH, "audio_database/maestro-v3.0.0",
-                   # "audio_database/ACPAS/", row['folder'],
-                   row['mid_file']),
+            osjoin(args.maestro_dir, row['mid_file']),
             duration=args.duration,
             warm_up_duration=args.warm_up
         )
@@ -71,26 +72,30 @@ def main(args):
         piano_model = row['piano_model']
         composer    = row['canonical_composer'].split(' ')[-1]
         inputs['piano_model'] = tf.convert_to_tensor(
-             [[np.where(piano_models == piano_model)[0][0]]]
-        )
-        print(f"Midi file loaded (with duration {inputs['duration'] - args.warm_up} s).\
-                \nNow synthesizing...")
+             [[np.where(piano_models == piano_model)[0][0]]])
+        logging.info(f"Midi file loaded \
+                     (with duration {inputs['duration'] - args.warm_up} s).\
+                     \nNow synthesizing...")
 
         # Synthesize
         outs = model(inputs, training=False)
+        logging.info("Synthesis done.")
+
         # Save audio
         write(osjoin(args.out_dir, f'{piano_model}{composer}.wav'),
               outs['audio_synth'][0, int(args.warm_up * model.sample_rate):].numpy(),
               model.sample_rate)
-        normalize_audio(osjoin(args.out_dir, f'{piano_model}{composer}.wav'), -20)
+        if args.normalize:
+            normalize_audio(
+                osjoin(args.out_dir, f'{piano_model}{composer}.wav'),
+                args.normalize)
 
         if args.decompose:
             # Unreverbed audio
             write(osjoin(args.out_dir, f'{piano_model}{composer}_unreverbed.wav'),
                   outs['add']['signal'][0, int(args.warm_up * model.sample_rate):].numpy(),
                   model.sample_rate)
-            # normalize_audio(osjoin(args.out_dir, f'{piano_model}{composer}_unreverbed.wav'), -20)
-            
+                
             # Additive and residual signals
             additive_synth, substractive_synth = model.processor_group.processors[:2]
 
@@ -118,12 +123,22 @@ def main(args):
             write(osjoin(args.out_dir, f'{piano_model}{composer}_additive.wav'),
                   additive_signal[0, int(args.warm_up * model.sample_rate):].numpy(),
                   model.sample_rate)
-            # normalize_audio(osjoin(args.out_dir, f'{piano_model}{composer}_additive.wav'), -20)
             write(osjoin(args.out_dir, f'{piano_model}{composer}_substractive.wav'),
                   substractive_signal[0, int(args.warm_up * model.sample_rate):].numpy(),
                   model.sample_rate)
-            # normalize_audio(osjoin(args.out_dir, f'{piano_model}{composer}_substractive.wav'), -20)
+            
+            if args.normalize:
+                normalize_audio(
+                    osjoin(args.out_dir, f'{piano_model}{composer}_unreverbed.wav'),
+                    args.normalize)
+                normalize_audio(
+                    osjoin(args.out_dir, f'{piano_model}{composer}_additive.wav'),
+                    args.normalize)
+                normalize_audio(
+                    osjoin(args.out_dir, f'{piano_model}{composer}_substractive.wav'),
+                    args.normalize)
 
 
 if __name__ == '__main__':
+    logging.set_verbosity(logging.INFO)
     main(process_args())

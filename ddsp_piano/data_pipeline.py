@@ -11,13 +11,13 @@ def get_dummy_data(batch_size=6,
                    n_synths=16):
     """Create random input data. Same arguments as for get_dataset()."""
     # Shapes definition
-    n_frames = int(duration * frame_rate)
+    n_frames  = int(duration * frame_rate)
     n_samples = int(duration * sample_rate)
 
     conditioning_shape = [batch_size, n_frames, n_synths, 2]
-    pedal_shape = [batch_size, n_frames, 4]
-    piano_model_shape = [batch_size, 1, ]
-    audio_shape = [batch_size, n_samples, ]
+    pedal_shape        = [batch_size, n_frames, 4]
+    piano_model_shape  = [batch_size, 1, ]
+    audio_shape        = [batch_size, n_samples, ]
 
     features = {
         "conditioning": tf.random.uniform(
@@ -327,14 +327,15 @@ def single_track_dataset(midi_filename,
     dataset = dataset.map(
         lambda sample: dict(
             sample,
-            piano_model=tf.zeros(1, dtype=tf.int32)))
+            piano_model=tf.zeros(1, dtype=tf.int32)),
+        num_parallel_calls=num_parallel_calls)
 
     # Make batch
     dataset = dataset.padded_batch(
         batch_size,
         padded_shapes={
             "audio":        tf.TensorShape([int(duration * sample_rate), ]),
-            "conditioning": tf.TensorShape([int(duration * frame_rate), 16, 2]),
+            "conditioning": tf.TensorShape([int(duration * frame_rate), max_polyphony, 2]),
             "pedal":        tf.TensorShape([int(duration * frame_rate), 4]),
             "polyphony":    tf.TensorShape([int(duration * frame_rate), ]),
             "piano_model":  tf.TensorShape([1, ])},

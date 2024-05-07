@@ -4,6 +4,7 @@ import argparse
 import tensorflow as tf
 
 from tqdm import tqdm
+from absl import logging
 from ddsp.training import trainers, train_util, summaries
 from ddsp.training.models import get_model
 from tensorflow.summary import create_file_writer, scalar
@@ -38,7 +39,7 @@ def process_args():
                         help="Learning rate. (default: %(default)s)")
 
     parser.add_argument('--config', '-c',
-                        default='ddsp_piano/configs/default.gin',
+                        default='ddsp_piano/configs/maestro-v2.gin',
                         help="A .gin configuration file.")
 
     parser.add_argument('--phase', '-p', type=int, default=1,
@@ -65,6 +66,7 @@ def process_args():
 
 
 def lock_gpu(soft=True, gpu_device_id=-1):
+    """Lock a GPU for training. (Ircam specific function)"""
     import socket
 
     if "ircam.fr" in socket.gethostname():
@@ -76,7 +78,7 @@ def lock_gpu(soft=True, gpu_device_id=-1):
         id_locked = gpl.get_gpu_lock(gpu_device_id=gpu_device_id, soft=soft)
     except gpl.NoGpuManager:
         id_locked = None
-        print("No gpu manager available - will use all available GPUs")
+        logging.info("No gpu manager available - will use all available GPUs")
     except gpl.NoGpuAvailable:
         # no GPU available for locking, continue with CPU
         id_locked = None
@@ -151,7 +153,7 @@ def main(args):
     # Restore model and optimizer states
     if args.restore is not None:
         trainer.restore(args.restore)
-        print(f"Restored model from {args.restore} at step {trainer.step.numpy()}")
+        logging.info(f"Restored model from {args.restore} at step {trainer.step.numpy()}")
 
     # Inits before the training loop
     exp_dir = osjoin(args.exp_dir, f'phase_{args.phase}')
@@ -186,7 +188,7 @@ def main(args):
                             message=f"Nan loss at step {trainer.step.numpy()} with loss {k}"))
 
                 # Write training loss values in Tensorboard
-                print(f"Training loss: {epoch_losses['total_loss'] / args.steps_per_epoch}")
+                logging.info(f"Training loss: {epoch_losses['total_loss'] / args.steps_per_epoch}")
                 for k, loss in epoch_losses.items():
                     scalar('train_loss/' + k,
                            loss / args.steps_per_epoch,
@@ -194,7 +196,7 @@ def main(args):
 
                 # Save model epoch before validation
                 trainer.save(osjoin(exp_dir, "last_iter"))
-                print(f'Last iteration model saved at {osjoin(exp_dir, "last_iter")}')
+                logging.info(f'Last iteration model saved at {osjoin(exp_dir, "last_iter")}')
 
                 # -------------------------------------
                 # Skip validation during early training
@@ -228,7 +230,7 @@ def main(args):
                         val_outs_summary = outputs
 
                 # Write validation loss values in Tensorboard
-                print(f"Validation loss: {epoch_val_losses['total_loss'] / (val_step + 1)}")
+                logging.info(f"Validation loss: {epoch_val_losses['total_loss'] / (val_step + 1)}")
                 for k, loss in epoch_val_losses.items():
                     scalar('val_loss/' + k,
                            loss / (val_step + 1),
@@ -250,11 +252,12 @@ def main(args):
 
     except tf.errors.InvalidArgumentError as e:
         trainer.save(osjoin(exp_dir, "crashed_iter"))
-        print(e)
+        logging.error(e)
 
     except KeyboardInterrupt:
         trainer.save(osjoin(exp_dir, "stopped_iter"))
 
 
 if __name__ == '__main__':
+    logging.set_verbosity(logging.INFO)
     main(process_args())

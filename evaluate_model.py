@@ -11,20 +11,19 @@ from ddsp_piano.data_pipeline import get_dummy_data, get_test_dataset
 
 osjoin = os.path.join
 
-MAESTRO_DIR = osjoin(os.environ['DATARD_PATH'],
-                     'audio_database/maestro-v3.0.0/')
-
 
 def process_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', '-c', type=str, help="A .gin model config",
-                        default='ddsp_piano/configs/maestro-v2_unregularized.gin')
+                        default='ddsp_piano/configs/maestro-v2.gin')
     parser.add_argument('--ckpt', type=str, help="Model checkpoint to load.",
-                        default='ddsp_piano/model_weights/ckpt-0')
+                        default='ddsp_piano/model_weights/v2/')
     parser.add_argument('--warm_up', '-wu', type=float, default=0.5,
                         help="Warm-up duration (in s, default: %(default)s)")
     parser.add_argument('--get_wav', '-w', action='store_true',
                         help="Generate wav files.")
+    parser.add_argument('maestro_dir', type=str,
+                        help="Path to the MAESTRO dataset.")
     parser.add_argument('out_dir', type=str,
                         help="Folder containing the synthesized test wav files.")
     return parser.parse_args()
@@ -57,8 +56,7 @@ def main(args):
     with strategy.scope():
         # Model contruction
         model = get_model()
-        trainer = trainers.Trainer(model=model,
-                                   strategy=strategy)
+        trainer = trainers.Trainer(model=model, strategy=strategy)
         trainer.build(get_dummy_data(batch_size=1,
                                      duration=10.0,
                                      sample_rate=model.sample_rate))
@@ -67,7 +65,10 @@ def main(args):
         trainer.restore(args.ckpt)
 
     # Retrieve test dataset
-    test_dataset = get_test_dataset(filename=MAESTRO_DIR, batch_size=1, duration=10.0, sample_rate=model.sample_rate)
+    test_dataset = get_test_dataset(filename=args.maestro_dir,
+                                    batch_size=1,
+                                    duration=10.0,
+                                    sample_rate=model.sample_rate)
     test_dataset = trainer.distribute_dataset(test_dataset)
 
     # Init
