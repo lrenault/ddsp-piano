@@ -59,7 +59,7 @@ def main(args):
         trainer = trainers.Trainer(model=model,
                                    strategy=strategy)
         trainer.build(get_dummy_data(batch_size=1,
-                                     duration=inputs['duration'],
+                                     duration=1.0,
                                      sample_rate=model.sample_rate))
         # Restore model weight
         logging.info("Model built, now retrieving model weights...")

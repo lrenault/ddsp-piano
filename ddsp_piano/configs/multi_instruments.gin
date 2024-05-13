@@ -87,12 +87,12 @@ polyphonic_dag.polyphonic_dag:
     n_synths = %n_synths
     additive = @inharm_synth.MultiInharmonic()
     additive_controls = ['amplitudes', 'harmonic_distribution', 'inharm_coef', 'f0_hz']
-    noise = @inharm_synth.DynamicSizeFilteredNoise()
+    noise = @filtered_noise_synth.DynamicSizeFilteredNoise()
     noise_controls = ['magnitudes']
     reverb = @effects.Reverb()
     reverb_controls = ['reverb_ir']
 
-inharm_synth.DynamicSizeFilteredNoise:
+filtered_noise_synth.DynamicSizeFilteredNoise:
     name = 'noise'
     frame_rate = %frame_rate
     sample_rate = %sample_rate
