@@ -3,12 +3,6 @@ import tensorflow as tf
 from numpy import pi
 from ddsp import core
 from ddsp import processors
-from ddsp.synths import FilteredNoise
-from priv_ddfx.effects import DelayNetwork
-
-# Register Differentiable Feedback Delay Reverb from priv-ddfx
-# (TODO): provide link to priv-ddfx repo
-gin.external_configurable(DelayNetwork)
 
 
 def positive_tanh(x):
@@ -297,36 +291,6 @@ class MultiInharmonic(InHarmonic):
                 f0_hz[..., substring: substring + 1]
             )
         return audio
-
-
-@gin.register
-class DynamicSizeFilteredNoise(FilteredNoise):
-    """White noise filtering synthesis with arbitrary output length controls."""
-    def __init__(self, frame_rate=250, sample_rate=16000, **kwargs):
-        super().__init__(**kwargs)
-        self.frame_rate = frame_rate
-        self.sample_rate = sample_rate
-
-    @property
-    def upsampling(self):
-        return int(self.sample_rate / self.frame_rate)
-
-    def get_signal(self, magnitudes):
-        """Synthesize audio with filtered white noise.
-        Args:
-          magnitudes: Magnitudes tensor of shape [batch, n_frames, n_filter_banks].
-            Expects float32 that is strictly positive.
-        Returns:
-          signal: A tensor of harmonic waves of shape [batch, n_samples, 1].
-        """
-        batch_size, n_frames, *axis = magnitudes.shape
-
-        n_samples = self.upsampling * n_frames
-
-        signal = tf.random.uniform([batch_size, n_samples],
-                                   minval=-1., maxval=1.)
-        return core.frequency_filter(signal, magnitudes,
-                                     window_size=self.window_size)
 
 
 @gin.register

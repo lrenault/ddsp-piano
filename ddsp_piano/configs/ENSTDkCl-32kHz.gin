@@ -88,10 +88,9 @@ polyphonic_dag.polyphonic_dag:
     n_synths = %n_synths
     additive = @inharm_synth.MultiInharmonic()
     additive_controls = ['amplitudes', 'harmonic_distribution', 'inharm_coef', 'f0_hz']
-    # noise = @synths.FilteredNoise()
     noise = @inharm_synth.DynamicSizeFilteredNoise()
     noise_controls = ['magnitudes']
-    reverb = @priv_ddfx.effects.DelayNetwork()
+    reverb = @fdn_reverb.FeedbackDelayNetwork()
     reverb_controls = []
 
 inharm_synth.DynamicSizeFilteredNoise:
@@ -106,10 +105,9 @@ inharm_synth.MultiInharmonic:
     inference = %inference
     scale_fn = @exp_tanh
     normalize_after_nyquist_cut = False
-priv_ddfx.effects.DelayNetwork:
+fdn_reverb.FeedbackDelayNetwork:
     trainable = True
     delay_trainable = True
-    freq_points = 64000
     delay_lines = 6
     sampling_rate = %sample_rate
 

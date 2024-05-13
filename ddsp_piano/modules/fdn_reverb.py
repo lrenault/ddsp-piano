@@ -148,7 +148,7 @@ class FeedbackDelayNetwork(processors.Processor):
                 initializer=tf.random_normal_initializer(mean=2.0, stddev=5e-1),
                 constraint=tf.keras.constraints.NonNeg(),
             )
-            self._alpha_tone = self.add_weight(
+            self.alpha_tone = self.add_weight(
                 name="_alpha_tone",
                 shape=[],
                 dtype=tf.float32,

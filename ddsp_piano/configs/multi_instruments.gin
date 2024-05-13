@@ -52,10 +52,10 @@ PianoModel.detuner = @sub_modules.Detuner()
 Detuner.n_substrings = 1
 
 # Reverb
-PianoModel.reverb_model = @sub_modules.MultiInstrumentFeedbackDelayReverb()
+PianoModel.reverb_model = @sub_modules.MultiInstrumentReverb()
 MultiInstrumentFeedbackDelayReverb:
     n_instruments = %n_instruments
-    # reverb_duration = %reverb_duration
+    reverb_duration = %reverb_duration
     sample_rate = %sample_rate
 
 # Context network
@@ -113,12 +113,11 @@ effects.Reverb:
 # Losses
 # ======
 PianoModel.losses = [@ddsp_piano.modules.losses.SpectralLoss(),
-                     # @ReverbRegularizer()
-                     ]
+                     @ReverbRegularizer()]
 ddsp_piano.modules.losses.SpectralLoss:
     name = 'audio_stft_loss'
     loss_type = 'L1'
     mag_weight = 1.0
     logmag_weight = 1.0
-# ReverbRegularizer.name = 'reverb_regularizer'
+ReverbRegularizer.name = 'reverb_regularizer'
 

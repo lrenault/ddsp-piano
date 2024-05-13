@@ -2,7 +2,6 @@ import gin.tf.external_configurables
 import ddsp
 import ddsp_piano
 
-
 # ======
 # Macros
 # ======
@@ -95,7 +94,6 @@ polyphonic_dag.polyphonic_dag:
     n_synths = %n_synths
     additive = @inharm_synth.MultiInharmonic()
     additive_controls = ['amplitudes', 'harmonic_distribution', 'inharm_coef', 'f0_hz']
-    # noise = @synths.FilteredNoise()
     noise = @inharm_synth.DynamicSizeFilteredNoise()
     noise_controls = ['magnitudes']
     reverb = @effects.Reverb()
@@ -111,7 +109,6 @@ inharm_synth.MultiInharmonic:
     sample_rate = %sample_rate
     inference = %inference
 effects.Reverb.trainable = False
-
 
 
 # ======

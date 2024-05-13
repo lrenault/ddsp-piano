@@ -88,14 +88,14 @@ Additional arguments include:
 
 Note that the `path/to/maestrov3.0.0/` can either be the extracted Maestro dataset as is, or the `maestro_training.tfrecord` preprocessed version obtained from the previous section.
 
-During training, the Tensorboard logs are saved under `experiment-directory/`
+During training, the Tensorboard logs are saved under `<experiment-directory>/logs/`.‡
 
 ### Full Training Procedure (legacy)
 This script reproduces the full training of the default model presented in the papers:
 ```bash
 source train_ddsp_piano.sh <path-to-maestro-v3.0.0/> <experiment-directory/>
 ```
-It alternats between 2 training procedures (one for the layers involved in the partial frequencies computation and the other for the remaining layers).
+It alternates between 2 training phases (one for the layers involved in the partial frequencies computation and the other for the remaining layers).
 The final model checkpoint should be located in `<experiment-directory>/phase_3/last_iter/`.
 
 However, as frequency estimation with differentiable oscillators is still an unsolved issue (see [here](https://arxiv.org/abs/2012.04572) and [here](https://doi.org/10.3389/frsip.2023.1284100)), the second training phase does not improve the model quality and we recommend to just use the single training phase script above for simplicity.

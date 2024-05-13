@@ -25,7 +25,7 @@ def process_args():
                               (default: %(default)s)")
     parser.add_argument('--warm_up', '-wu', type=float, default=0.5,
                         help="Warm-up duration (in s, default: %(default)s)")
-    parser.add_argument('-n', '--normalize', type=str, default=None,
+    parser.add_argument('-n', '--normalize', type=float, default=None,
                         help="Normalize the output audio to the given level (dBFS).\
                               (default: %(default)s)")
     parser.add_argument('--decompose', '-dc', action='store_true',
@@ -73,8 +73,7 @@ def main(args):
         composer    = row['canonical_composer'].split(' ')[-1]
         inputs['piano_model'] = tf.convert_to_tensor(
              [[np.where(piano_models == piano_model)[0][0]]])
-        logging.info(f"Midi file loaded \
-                     (with duration {inputs['duration'] - args.warm_up} s).\
+        logging.info(f"Midi file loaded (with duration {inputs['duration'] - args.warm_up} s).\
                      \nNow synthesizing...")
 
         # Synthesize

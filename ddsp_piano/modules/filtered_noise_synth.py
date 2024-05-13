@@ -1,15 +1,51 @@
-"""
-Tensorflow-DDSP adaptation of
-https://github.com/adrianbarahona/noisebandnet/tree/master/noisebandnet
-"""
 import gin
 import math
 import numpy as np
 import tensorflow as tf
-from scipy import signal
 from ddsp import core, processors
+from scipy import signal
+from ddsp.synths import FilteredNoise
 
 tfkl = tf.keras.layers
+
+
+@gin.register
+class DynamicSizeFilteredNoise(FilteredNoise):
+    """White noise filtering synthesis with arbitrary output length controls.
+    Re-adapted from
+    https://github.com/magenta/ddsp/blob/main/ddsp/synths.py
+    """
+    def __init__(self, frame_rate=250, sample_rate=16000, **kwargs):
+        super().__init__(**kwargs)
+        self.frame_rate = frame_rate
+        self.sample_rate = sample_rate
+
+    @property
+    def upsampling(self):
+        return int(self.sample_rate / self.frame_rate)
+
+    def get_signal(self, magnitudes):
+        """Synthesize audio with filtered white noise.
+        Args:
+          magnitudes: Magnitudes tensor of shape [batch, n_frames, n_filter_banks].
+            Expects float32 that is strictly positive.
+        Returns:
+          signal: A tensor of harmonic waves of shape [batch, n_samples, 1].
+        """
+        batch_size, n_frames, *axis = magnitudes.shape
+
+        n_samples = self.upsampling * n_frames
+
+        signal = tf.random.uniform([batch_size, n_samples],
+                                   minval=-1., maxval=1.)
+        return core.frequency_filter(signal, magnitudes,
+                                     window_size=self.window_size)
+
+
+# -----------------------------------------------------------------------------
+# NoiseBandNet: from here onwards, the code is a tf-ddsp adaptation of
+# https://github.com/adrianbarahona/noisebandnet/tree/master/noisebandnet
+# -----------------------------------------------------------------------------
 
 
 class FilterBank(tfkl.Layer):
@@ -128,20 +164,30 @@ class NoiseBandNetSynth(processors.Processor):
     https://github.com/adrianbarahona/noisebandnet/blob/master/noisebandnet/model.py
     Args:
         - n_band (int): number of bands in the filterbank.
-        - upsampling (int): synthesis window size (in samples). frame_rate = sample_rate / upsampling
-        - filterbank_attenuation (float): FIR filter attenuation used in the Kaiser window (in dB).
+        - upsampling (int): synthesis window size (in samples).
+        frame_rate = sample_rate / upsampling
+        - filterbank_attenuation (float): FIR filter attenuation used in the
+        Kaiser window (in dB).
         - sample_rate (int): Sampling rate
-        - attenuation (float): FIR filter attenuation used in the Kaiser window (in dB)
-        - min_noise_len (int): Minimum noise length (in samples) for the noise bands, must be a power of 2
-        - linear_min_f (float): Low pass filter cutoff frequency
-        - linear_max_f_cutoff_fs (float): Portion of the spectrum that is linearly distributed in a fraction of the sampling rate
-        - normalize_noise_bands (bool): Normalize the noise bands to the abslute maximum value. Scale up the noise bands amplitude."""
+        - attenuation (float): FIR filter attenuation used in the Kaiser
+        window (in dB).
+        - min_noise_len (int): Minimum noise length (in samples) for the noise
+        bands (must be a power of 2).
+        - linear_min_f (float): Low pass filter cutoff frequency.
+        - linear_max_f_cutoff_fs (float): Portion of the spectrum that is
+        linearly distributed in a fraction of the sampling rate.
+        - normalize_noise_bands (bool): Normalize the noise bands to the abslute
+        maximum value. Scale up the noise bands amplitude.
+    """
     def __init__(self, upsampling=64,
                  filterbank_attenuation=50, sample_rate=16000, min_noise_len=2**4,  # 15, 
                  linear_min_f=20, linear_max_f_cutoff_fs=4, normalize_noise_bands=True,
                  scale_fn=core.exp_sigmoid, inference=False, name="noise", **kwargs):
         super().__init__(name=name, **kwargs)
-        assert min_noise_len > 0 and isinstance(min_noise_len, int) and check_power_of_2(min_noise_len), "min_noise_len must be a positive integer and a power of 2"
+        assert min_noise_len > 0 and \
+               isinstance(min_noise_len, int) and \
+               check_power_of_2(min_noise_len), \
+               "min_noise_len must be a positive integer and a power of 2"
         self.scale_fn               = scale_fn
         self.upsampling             = upsampling
         self.sample_rate            = sample_rate
