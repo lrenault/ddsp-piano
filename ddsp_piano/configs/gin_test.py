@@ -22,8 +22,7 @@ if __name__ == "__main__":
 		model = get_model()
 		model.alternate_training(first_phase=True)
 		trainer = trainers.Trainer(model=model, strategy=strategy)
-	trainer.build(get_dummy_data(batch_size=1,
+	trainer.build(get_dummy_data(batch_size=6,
 						   	     duration=3,
 								 sample_rate=model.sample_rate))
-
 	import pdb; pdb.set_trace()

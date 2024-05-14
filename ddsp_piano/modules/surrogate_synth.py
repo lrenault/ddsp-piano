@@ -122,7 +122,7 @@ class SurrogateAdditive(processors.Processor):
                  normalize_below_nyquist=True,
                  inference=False,
                  name='inharmonic'):
-        super(SurrogateAdditive, self).__init__(name=name)
+        super().__init__(name=name)
         self.frame_rate = frame_rate
         self.sample_rate = sample_rate
         self.min_frequency = min_frequency

@@ -44,8 +44,8 @@ Parallelizer:
     mono_keys=('f0_hz',
                'inharm_coef',
                'amplitudes',
-               'complex_amplitudes',
-               'complex_time',
+               'decays',
+               'decay_time',
                'harmonic_distribution',
                'magnitudes')
 
@@ -105,7 +105,7 @@ polyphonic_dag.polyphonic_dag:
     n_synths = %n_synths
     additive = @surrogate_synth.SurrogateAdditive()
     additive_controls = ['amplitudes',
-                         'complex_amplitudes', 'complex_time',
+                         'decays', 'decay_time',
                          'harmonic_distribution',
                          'inharm_coef', 'f0_hz']
     noise = @filtered_noise_synth.DynamicSizeFilteredNoise()

@@ -1,8 +1,11 @@
 import gin
 import tensorflow as tf
 import ddsp
-
 from ddsp.training.models.model import Model
+
+
+def exists(x):
+    return x is not None
 
 
 @gin.configurable
@@ -22,6 +25,7 @@ class PianoModel(Model):
         - inharm_model (nn.DictLayer): inharmonicity model over tessitura.
         - detuner (nn.DictLayer): tuning model for pitch to absolute f0
         frequency.
+        - harmonic_masking (nn.DictLayer): sub-module for masking partials.
         - reverb_model (nn.DictLayer): recording environment impulse responses.
         - processor_group (ddsp.processors.ProcessorGroup): group of
         differentiable processors generating audio from controls.
@@ -41,10 +45,9 @@ class PianoModel(Model):
                  background_noise_model=None,
                  reverb_model=None,
                  processor_group=None,
-                 ddsp_synths=None,
                  losses=None,
                  **kwargs):
-        super(PianoModel, self).__init__(**kwargs)
+        super().__init__(**kwargs)
         self.z_encoder              = z_encoder
         self.note_release           = note_release
         self.context_network        = context_network
@@ -57,7 +60,6 @@ class PianoModel(Model):
         self.background_noise_model = background_noise_model
         self.reverb_model           = reverb_model
         self.processor_group        = processor_group
-        self.ddsp_synths            = ddsp_synths
 
         self.loss_objs = ddsp.core.make_iterable(losses)
 
@@ -70,9 +72,7 @@ class PianoModel(Model):
         return self.processor_group.processors[0].sample_rate
 
     def _update_losses_dict(self, loss_objs, *args, **kwargs):
-        super(PianoModel, self)._update_losses_dict(loss_objs,
-                                                    *args,
-                                                    **kwargs)
+        super()._update_losses_dict(loss_objs, *args, **kwargs)
         self._losses_dict['regularization_loss'] = tf.reduce_sum(self.losses)
 
     def alternate_training(self, first_phase=True):
@@ -85,10 +85,10 @@ class PianoModel(Model):
         for module in [self.inharm_model,
                        self.detuner,
                        self.surrogate_module]:
-            if module is not None:
+            if exists(module):
                 module.trainable = not first_phase
 
-        if self.z_encoder is not None:
+        if exists(self.z_encoder):
             self.z_encoder.alternate_training(first_phase)
 
         # Modules not involved in freq computing have inversed trainability
@@ -97,11 +97,11 @@ class PianoModel(Model):
                        self.background_noise_model,
                        self.monophonic_network,
                        self.reverb_model]:
-            if module is not None:
+            if exists(module):
                 module.trainable = first_phase
 
         # Compute multiple note signals only when learning detuner weights
-        if self.detuner is not None:
+        if exists(self.detuner):
             self.detuner.use_detune = not first_phase
 
     def all_trainable(self, trainable=True):
@@ -112,7 +112,7 @@ class PianoModel(Model):
                        self.context_network,
                        self.monophonic_network,
                        self.reverb_model]:
-            if module is not None:
+            if exists(module):
                 module.trainable = trainable
 
     def compute_global_features(self, features, training):
@@ -121,7 +121,7 @@ class PianoModel(Model):
                            self.context_network,
                            self.background_noise_model,
                            self.reverb_model]:
-            if sub_module is not None:
+            if exists(sub_module):
                 features.update(sub_module(features, training=training))
 
         return features
@@ -134,7 +134,7 @@ class PianoModel(Model):
                            self.monophonic_network,
                            self.surrogate_module,
                            self.harmonic_masking]:
-            if sub_module is not None:
+            if exists(sub_module):
                 features.update(sub_module(features, training=training))
 
         return features
@@ -153,24 +153,17 @@ class PianoModel(Model):
         # Compute monophonic features
         features = self.compute_monophonic_features(features, training=training)
 
-        if self.ddsp_synths is None:
-            # Disentangle polyphony and batch axis
-            features = self.parallelizer(features, parallelize=False)
+        # Disentangle polyphony and batch axis
+        features = self.parallelizer(features, parallelize=False)
 
-            # Processor group call
-            pg_out = self.processor_group(features, return_outputs_dict=True)
+        # Processor group call
+        pg_out = self.processor_group(features, return_outputs_dict=True)
 
-            # Parse outputs
-            outputs = pg_out['controls']
-            outputs['audio_synth'] = pg_out['signal']
+        # Parse outputs
+        outputs = pg_out['controls']
+        outputs['audio_synth'] = pg_out['signal']
 
-            if training:
-                self._update_losses_dict(self.loss_objs, outputs)
-
-        else:
-            features.update(self.ddsp_synths(features))
-            outputs = features
-            if training:
-                self._update_losses_dict(self.loss_objs, features)
+        if training:
+            self._update_losses_dict(self.loss_objs, outputs)
 
         return outputs

@@ -12,7 +12,6 @@ from tensorflow.summary import create_file_writer, scalar
 from ddsp_piano.data_pipeline \
     import get_dummy_data, get_training_dataset, get_validation_dataset
 from ddsp_piano.utils.io_utils import collect_garbage
-from ddsp_piano.utils.summaries import inharm_summary, detune_summary
 
 osjoin = os.path.join
 

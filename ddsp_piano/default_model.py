@@ -91,7 +91,6 @@ def get_model(inference=False,
               n_substrings=2,
               n_piano_models=10,
               piano_embedding_dim=16,
-              n_noise_filter_banks=64,
               frame_rate=250,
               sample_rate=16000,
               reverb_duration=1.5):

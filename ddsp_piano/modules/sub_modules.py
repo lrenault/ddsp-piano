@@ -21,15 +21,15 @@ class ContextNetwork(nn.OutputSplitsLayer):
     Args:
         - layers (list(tfkl.Layer)): list of neural layers inside the
         Sequential model.
+        - output_split (list(key, dim)): output keys and dims.
+        - normalize_pitch (bool): whether to scale input pitch to range [0,1].
     """
-
     def __init__(self,
                  layers,
                  output_splits=(('context', 32),),
                  normalize_pitch=False,
                  **kwargs):
-        super(ContextNetwork, self).__init__(output_splits=output_splits,
-                                             **kwargs)
+        super().__init__(output_splits=output_splits, **kwargs)
         self.model = tf.keras.Sequential(layers=layers)
         self.normalize_pitch = normalize_pitch
         self.midi_norm = 128.
@@ -189,10 +189,9 @@ class OneHotZEncoder(nn.DictLayer):
         - duration (int): pool embedding value over this duration.
         - frame_rate (int): number of controls per second.
     """
-
     def __init__(self, n_instruments=16, z_dim=16, duration=None, frame_rate=250,
                  **kwargs):
-        super(OneHotZEncoder, self).__init__(**kwargs)
+        super().__init__(**kwargs)
         self.n_instruments = n_instruments
         self.z_dim = z_dim
         self.duration = duration
@@ -253,15 +252,24 @@ class OneHotZEncoder(nn.DictLayer):
 
 @gin.register
 class BackgroundNoiseFilter(nn.DictLayer):
-    """Background noise modeler learning a constant noise filter."""
+    """Background noise modeler, learning a constant noise filter accross
+    each recording environment.
+    Args:
+        - n_instruments (int): number of instrument to be supported.
+        - n_filters (int): number of noise filter bands.
+        - duration (float): segment duration (in s).
+        - frame_rate (int): number of controls per second.
+        - denoise (bool): whether to output the learnt noise or replace it
+        by silence.
+    """
     def __init__(self, n_instruments=16, n_filters=64,
                  duration=None, frame_rate=250, denoise=False, **kwargs):
         super().__init__(**kwargs)
         self.n_instruments = n_instruments
-        self.n_filters = n_filters
-        self.duration = duration
-        self.frame_rate = frame_rate
-        self.denoise = denoise
+        self.n_filters     = n_filters
+        self.duration      = duration
+        self.frame_rate    = frame_rate
+        self.denoise       = denoise
 
         self.embedding = tfkl.Embedding(input_dim=self.n_instruments,
                                         output_dim=self.n_filters,
@@ -296,18 +304,18 @@ class MultiInstrumentReverb(nn.DictLayer):
     """Reverb with learnable impulse response compatible with a multi-
     environment setting.
     Args:
-        - inference (bool): training or inference setting.
         - n_instruments (int): number of instrument reverbs to model.
-        - reverb_length (int): number of samples for each impulse response.
+        - reverb_duration (int): duration of the learnt reverbs.
+        - sample_rate (int): number of audio samples per second.
+        - inference (bool): training or inference setting.
     """
-
     def __init__(self,
                  n_instruments=16,
-                 reverb_duration=3,
+                 reverb_duration=1.5,
                  sample_rate=16000,
                  inference=False,
                  **kwargs):
-        super(MultiInstrumentReverb, self).__init__(**kwargs)
+        super().__init__(**kwargs)
         self.reverb_duration = reverb_duration
         self.sample_rate = sample_rate
         self.n_instruments = n_instruments
@@ -326,8 +334,7 @@ class MultiInstrumentReverb(nn.DictLayer):
                            self.reverb_length,
                            embeddings_initializer=tf.random_normal_initializer(
                                mean=0,
-                               stddev=1e-6)
-                           )])
+                               stddev=1e-6))])
 
     def exponential_decay_mask(self, ir, decay_exponent=4., decay_start=16000):
         """ Apply exponential decay mask on impulse responde as in MIDI-ddsp
@@ -362,13 +369,15 @@ class MultiInstrumentReverb(nn.DictLayer):
 class MultiInstrumentFeedbackDelayReverb(nn.DictLayer):
     """Feedback-delay reverb parameters in a multi-environment setting.
     Args:
-        - inference (bool): training or inference setting.
         - n_instruments (int): number of instrument reverbs to model.
-        - reverb_length (int): number of samples for each impulse response.
+        - sample_rate (int): number of audio samples per second.
+        - delay_lines (int): number of delay lines in the FDN.
+        - early_ir_length (int): length of the early FIR.
+        - regularize_early (bool): whether to regularize the early IR or not.
+        - inference (bool): training or inference setting.
     """
     def __init__(self, n_instruments=10, sample_rate=16000, delay_lines=8,
-                 early_ir_length=200, regularize_early=False,
-                 **kwargs):
+                 early_ir_length=200, regularize_early=False, **kwargs):
         super().__init__(**kwargs)
         self.n_instruments = n_instruments
         self.sample_rate = sample_rate
@@ -433,10 +442,9 @@ class MultiInstrumentFeedbackDelayReverb(nn.DictLayer):
             'early_ir': self._early_ir(piano_model),
         }
         ir = tf.vectorized_map(lambda x: self.reverb_model.get_ir(**x),
-                               elems=controls_dict,
-                               # fn_output_signature=tf.float32
-                               )
+                               elems=controls_dict)
         return ir
+
 
 # -----------------------------------------------------------------------------
 # Monophonic amplitude models
@@ -449,18 +457,17 @@ class MonophonicNetwork(nn.OutputSplitsLayer):
     parallelized monophonic inputs. Wrapped inside a DictLayer for named inputs
     compatibility.
     Args:
-        - layers (list(tfkl.Layer)): list of neural layers inside the Sequen-
-        tial model.
+        - layers (list(tfkl.Layer)): list of neural layers inside the internal
+        Sequential model.
+        - output_split (list(key, dim)): output keys and dims.
     """
-
     def __init__(self,
                  layers,
                  output_splits=(('amplitudes', 1),
                                 ('harmonic_distribution', 96),
                                 ('magnitudes', 64)),
                  **kwargs):
-        super(MonophonicNetwork, self).__init__(output_splits=output_splits,
-                                                **kwargs)
+        super().__init__(output_splits=output_splits, **kwargs)
         self.model = tf.keras.Sequential(layers=layers)
         self.midi_norm = 128.
 
@@ -492,11 +499,7 @@ class MonophonicNetwork(nn.OutputSplitsLayer):
 class MonophonicDeepNetwork(MonophonicNetwork):
     """Monophonic network using the same architecture as the original DDSP
     decoder MLP layers."""
-    def __init__(self,
-                 rnn_channels=256,#192
-                 ch=256,#64
-                 layers_per_stack=3,
-                 **kwargs):
+    def __init__(self, rnn_channels=192, ch=64, layers_per_stack=3, **kwargs):
         super().__init__(layers=nn.Rnn(rnn_channels, 'gru'), **kwargs)
         # Layer creation
         stack = lambda: nn.FcStack(ch, layers_per_stack)
@@ -523,11 +526,13 @@ class MonophonicDeepNetwork(MonophonicNetwork):
 
 @gin.register
 class Parallelizer(tfkl.Layer):
-    """Module for merging and unmerge the batch and polyphony axis of features.
+    """Module for merging and unmerging the batch and polyphony axis of
+    given features dictionary.
     Args:
-        - n_synths (int): size of polypohny axis.
+        - n_synths (int): size of polyphony axis.
+        - global_keys (list(string)): list of global features keys.
+        - mono_keys (list(string)): list of monophonic features keys.
     """
-
     def __init__(self,
                  n_synths=16,
                  global_keys=('conditioning',
@@ -540,7 +545,7 @@ class Parallelizer(tfkl.Layer):
                             'harmonic_distribution',
                             'magnitudes'),
                  **kwargs):
-        super(Parallelizer, self).__init__(**kwargs)
+        super().__init__(**kwargs)
         self.n_synths    = n_synths
         self.global_keys = global_keys
         self.mono_keys   = mono_keys
@@ -564,19 +569,15 @@ class Parallelizer(tfkl.Layer):
     def parallelize_feature(self, x):
         # Merge the polyphony and batch axis (which are the first two axis)
         shape = tf.shape(x)
-        new_shape = tf.concat(
-            [[self.n_synths * self.batch_size], shape[2:]],
-            axis=0
-        )
+        new_shape = tf.concat([[self.n_synths * self.batch_size], shape[2:]],
+                              axis=0)
         return tf.reshape(x, new_shape)
 
     def unparallelize_feature(self, x):
         # Disentangle batch and polyphony axis
         shape = tf.shape(x)
-        new_shape = tf.concat(
-            [[self.n_synths, self.batch_size], shape[1:]],
-            axis=0
-        )
+        new_shape = tf.concat([[self.n_synths,  self.batch_size], shape[1:]],
+                              axis=0)
         return tf.reshape(x, new_shape)
 
     def parallelize(self, features):
@@ -587,12 +588,7 @@ class Parallelizer(tfkl.Layer):
 
     def unparallelize(self, features):
         """Disentangle batch and polyphony axis and distribute features as
-        monophonic controls.
-        Args:
-            - features (dict(Tensors)): named features and controls.
-            - keys (list(string)): list of feature keys to unparallelize and
-            create monophonic controls.
-        """
+        monophonic controls."""
         for k in self.mono_keys:
             features[k] = self.unparallelize_feature(features[k])
             for i in range(self.n_synths):
@@ -616,7 +612,7 @@ class InharmonicityNetwork(nn.DictLayer):
     """ Compute inharmonicity coefficient corresponding to MIDI notes. """
 
     def __init__(self, name="inharmonicity_net", **kwargs):
-        super(InharmonicityNetwork, self).__init__(name=name, **kwargs)
+        super().__init__(name=name, **kwargs)
         self.midi_norm = 128.
 
     def build(self, input_shape):
@@ -680,7 +676,7 @@ class InharmonicityNetwork(nn.DictLayer):
         """
         # Inharmonicity tessitura model
         reduced_notes = extended_pitch / self.midi_norm
-        slopes = self.slopes + self.slopes_modifier
+        slopes  = self.slopes  + self.slopes_modifier
         offsets = self.offsets + self.offsets_modifier
 
         bridges_asymptotes = slopes * (reduced_notes + offsets)
@@ -722,19 +718,19 @@ class ParametricTuning(InharmonicityNetwork):
     """
 
     def __init__(self, name='parametric_tuning', **kwargs):
-        super(ParametricTuning, self).__init__(name=name, **kwargs)
+        super().__init__(name=name, **kwargs)
 
         # Reference note
         self.reference_a = tf.convert_to_tensor(69., dtype=tf.float32)
 
         # Tuning parameters
-        self.pitch_translation = 64.  # m_0
-        self.decrease_slope = 24.  # alpha
+        self.pitch_translation  = 64.  # m_0
+        self.decrease_slope     = 24.  # alpha
         self.low_bass_asymptote = 4.51 - 1  # K
         self.erf = tf.math.tanh
 
     def inharm_model(self, *args):
-        return super(ParametricTuning, self).call(*args)
+        return super().call(*args)
 
     def streching_model(self, notes):  # rho
         rho = 1 - self.erf((notes - self.pitch_translation) / self.decrease_slope)
@@ -887,7 +883,7 @@ class DeepInharmonicity(nn.DictLayer):
         - ch (int): internal number of channels.
     """
     def __init__(self, ch=32, n_layers=4, name="inharmonicity_net", **kwargs):
-        super(DeepInharmonicity, self).__init__(**kwargs)
+        super().__init__(**kwargs)
         self.hidden_layers = nn.FcStack(ch, n_layers - 1)
         self.scale_layer = tfkl.Dense(ch, activation=partial(exp_sigmoid, max_value=1.))
         self.out_layer = tfkl.Dense(1, activation=lambda x: x / 1000.)
@@ -914,7 +910,7 @@ class Detuner(nn.DictLayer):
 
     def __init__(self, n_substrings=2, use_detune=True, name='detuner',
                  **kwargs):
-        super(Detuner, self).__init__(name=name, **kwargs)
+        super().__init__(name=name, **kwargs)
         self.n_substrings = n_substrings
         self.use_detune = use_detune
 
@@ -957,7 +953,7 @@ class DeepDetuner(nn.DictLayer):
 
     def __init__(self, n_substrings=2, use_detune=True, ch=32, n_layers=3,
                  name='detuner', **kwargs):
-        super(DeepDetuner, self).__init__(name=name, **kwargs)
+        super().__init__(name=name, **kwargs)
         self.n_substrings = n_substrings
         self.use_detune = use_detune
 
@@ -1053,7 +1049,7 @@ class OnsetLinspaceCell(tfkl.Layer):
     """Custom RNN cell for counting the frames since the last note onset."""
 
     def __init__(self, **kwargs):
-        super(OnsetLinspaceCell, self).__init__(**kwargs)
+        super().__init__(**kwargs)
         self.state_size = 1
 
     @tf.function
@@ -1087,13 +1083,13 @@ class SurrogateModule(nn.DictLayer):
         - extended_pitch (b, n_frames, n_synths, 1): extended active pitch
         conditioning.
     Returns:
-        - complex_amplitudes (batch, n_frames, n_harmonics): per-harmonic
+        - decays (batch, n_frames, n_harmonics): per-harmonic damping, or
         complex amplitude modulus.
-        - complex_timesteps (batch, n_frames, 1): time parametrization that
+        - decay_time (batch, n_frames, 1): time parametrization that
         resets at each new note onset.
     """
     def __init__(self, n_harmonics=96, **kwargs):
-        super(SurrogateModule, self).__init__(**kwargs)
+        super().__init__(**kwargs)
         self.midi_norm = 128.
         self.n_harmonics = n_harmonics
         self.amp_model = tfkl.Embedding(128,
@@ -1101,11 +1097,11 @@ class SurrogateModule(nn.DictLayer):
                                         embeddings_initializer='ones')
         self.time_model = tfkl.RNN(OnsetLinspaceCell(), return_sequences=True)
 
-    def call(self, conditioning, extended_pitch) -> ['complex_amplitudes', 'complex_time']:
-        complex_amplitudes = self.amp_model(tf.cast(extended_pitch[..., 0],
+    def call(self, conditioning, extended_pitch) -> ['decays', 'decay_time']:
+        decays = self.amp_model(tf.cast(extended_pitch[..., 0],
                                                     dtype=tf.int32))
-        complex_time = self.time_model(conditioning[..., 1:2])
-        return complex_amplitudes, complex_time
+        decay_time = self.time_model(conditioning[..., 1:2])
+        return decays, decay_time
 
 
 # -----------------------------------------------------------------------------
@@ -1123,16 +1119,15 @@ class F0ProcessorCell(tfkl.Layer):
         - release_duration (1): Release time (in s).
     """
 
-    def __init__(self, frame_rate=250):
-        super(F0ProcessorCell, self).__init__()
+    def __init__(self, frame_rate=250, **kwargs):
+        super().__init__(**kwargs)
+        self.release_duration = tf.Variable(1.1, name="F0decay")
         self.frame_rate = frame_rate
         self.state_size = 2
 
     def build(self, input_shape):
-        self.release_duration = tf.Variable(1.1, name="F0decay")
-
+        super().build(input_shape)
         self.trainable = False
-        self.built = True
 
     def saturated_relu(self, x, threshold=0):
         """0 when <= threshold, 1 when > threshold, linear in between."""
@@ -1180,7 +1175,7 @@ class NoteRelease(nn.DictLayer):
     RNN wrapper around the custom F0ProcessorCell."""
 
     def __init__(self, frame_rate=250, name='note_release', **kwargs):
-        super(NoteRelease, self).__init__(name=name, **kwargs)
+        super().__init__(name=name, **kwargs)
         self.layer = tfkl.RNN(F0ProcessorCell(frame_rate=frame_rate),
                               return_sequences=True)
 
@@ -1193,12 +1188,12 @@ class NoteRelease(nn.DictLayer):
 
 @gin.register
 class PartialMasking(nn.DictLayer):
-    """Set amplitudes of partials above n_partials to zero.
+    """Set amplitudes of partials above `n_partials` to zero.
     Args:
         - n_partials (int): number of first partial amplitudes to keep.
     """
     def __init__(self, n_partials, **kwargs):
-        super(PartialMasking, self).__init__(**kwargs)
+        super().__init__(**kwargs)
         self.n_partials = n_partials
 
     def call(self, harmonic_distribution, n_partials=None) -> ['harmonic_distribution']:
