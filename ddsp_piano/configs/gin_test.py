@@ -16,14 +16,14 @@ if __name__ == "__main__":
 	x = get_dummy_data(batch_size=6, duration=3)
 	y = model(x)
 	model.summary()
-	print(model.inharm_model.beta_t.get_weights())
 
 	strategy = train_util.get_strategy()
 	with strategy.scope():
 		model = get_model()
+		model.alternate_training(first_phase=True)
 		trainer = trainers.Trainer(model=model, strategy=strategy)
 	trainer.build(get_dummy_data(batch_size=1,
-						   	     duration=1,
+						   	     duration=3,
 								 sample_rate=model.sample_rate))
-	print(model.inharm_model.beta_t.get_weights())
+
 	import pdb; pdb.set_trace()

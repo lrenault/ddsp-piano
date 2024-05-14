@@ -98,10 +98,11 @@ class FiLMContextNetwork(nn.DictLayer):
     """Compute a context signal emcompasing all contextual information for
     future monophonic processing, namely polyphony, pedals signals and piano/
     speaker model.
-    Uses FiLM layer for including the computed piano embedding.
+    Uses a FiLM layer for including the computed piano embedding.
     Args:
-        - embedding_dim (int)
-        - context_dim (int): 
+        - n_instruments (int): number of different instruments in the dataset.
+        - layer_dim (int): hidden layers dimension.
+        - context_dim (int): output context signal dimension.
     """
     def __init__(self,
                  n_instruments=10,

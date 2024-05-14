@@ -22,7 +22,7 @@ class FeedbackDelayNetwork(processors.Processor):
     """Differentiable Feedback Delay Network reverb.
     Simplified from https://github.com/phvial/priv-ddfx/blob/main/effects.py
     (credits: Pierre-Hugo Vial, 2023, AQUA-RIUS ANR project).
-    Fixed config:
+    Config fixed to:
     - decorrelator: allpass
     - mixing_matrix_style: Householder
     - reverb_time_control: onepole
