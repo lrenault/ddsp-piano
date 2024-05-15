@@ -317,9 +317,9 @@ class MultiInstrumentReverb(nn.DictLayer):
                  **kwargs):
         super().__init__(**kwargs)
         self.reverb_duration = reverb_duration
-        self.sample_rate = sample_rate
-        self.n_instruments = n_instruments
-        self.inference = inference
+        self.sample_rate     = sample_rate
+        self.n_instruments   = n_instruments
+        self.inference       = inference
 
     @property
     def reverb_length(self):
@@ -380,8 +380,8 @@ class MultiInstrumentFeedbackDelayReverb(nn.DictLayer):
                  early_ir_length=200, regularize_early=False, **kwargs):
         super().__init__(**kwargs)
         self.n_instruments = n_instruments
-        self.sample_rate = sample_rate
-        self.delay_lines = delay_lines
+        self.sample_rate   = sample_rate
+        self.delay_lines   = delay_lines
 
         general_initializer = tf.random_normal_initializer(mean=0., stddev=1e-1)
         delay_initializer = tf.random_normal_initializer(mean=400., stddev=60.)
@@ -510,7 +510,7 @@ class MonophonicDeepNetwork(MonophonicNetwork):
     def compute_output(self, conditioning, extended_pitch, context):
         # Initial processing
         _extended_pitch = self.input_stacks[0](extended_pitch / self.midi_norm)
-        _conditioning = self.input_stacks[1](conditioning / [self.midi_norm, 1.])
+        _conditioning   = self.input_stacks[1](conditioning  / [self.midi_norm, 1.])
         _context = self.input_stacks[2](context)
 
         # Run RNN over the latents
@@ -1006,6 +1006,7 @@ class DictDetuner(nn.DictLayer):
         """Forward pass.
         Args:
             - extended_pitch (b, n, 1): active pitch conditioning.
+            - piano_model (b, 1): piano model conditioning.
         Returns:
             - f0_hz (b, n, 1): fundamental frequencies (in Hz).
         """

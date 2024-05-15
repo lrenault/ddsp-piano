@@ -43,9 +43,10 @@ def main(args):
                                        warm_up_duration=args.warm_up)
     # Add piano model conditioning
     inputs['piano_model'] = tf.convert_to_tensor([[args.piano_type]])
-
-    logging.info(f"Midi file loaded (with duration {inputs['duration'] - args.warm_up} s).\
-            \nNow building the piano synthesizer...")
+    logging.info(
+        f"Midi file loaded (with duration {inputs['duration'] - args.warm_up} s).\
+        \nNow building the piano synthesizer..."
+    )
 
     # Parse and override gin-config
     gin.parse_config_file(args.config)
