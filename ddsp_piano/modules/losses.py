@@ -1,8 +1,10 @@
+import gin
 import tensorflow as tf
 
 from ddsp.losses import Loss, SpectralLoss
 
 
+@gin.register
 class SpectralLoss(SpectralLoss):
     """Generalized multi-resolution spectral loss by retrieving the audio
     output of a specific processor in the processor group.
@@ -30,6 +32,7 @@ class SpectralLoss(SpectralLoss):
                                               synthesized_audio)
 
 
+@gin.register
 class ReverbRegularizer(Loss):
     """Regularization loss on the reverb impulse response.
     Params:
@@ -46,3 +49,44 @@ class ReverbRegularizer(Loss):
         loss = tf.reduce_sum(self.magnitude_order(outputs['reverb_ir']))
         loss /= outputs['reverb_ir'].shape[0]  # Divide by batch size
         return self.weight * loss
+
+
+@gin.register
+class InharmonicityLoss(Loss):
+    """Reject negative inharmonicity values.
+    Params:
+        - weight (float): loss weight.
+    """
+    def __init__(self, weight=10., **kwargs):
+        super(InharmonicityLoss, self).__init__(**kwargs)
+        self.weight = weight
+
+    def call(self, outputs, *args, **kwargs):
+        inharm_coef = outputs["inharm_coef"]
+        loss = tf.reduce_sum(tf.math.maximum(-inharm_coef, 0.))
+        loss /= inharm_coef.shape[0]  # Divide by batch size
+        return self.weight * loss
+        
+
+@gin.register
+class LoudnessLoss(SpectralLoss):
+    """Loss comparing the loudness between two audio signals from two processor
+    outputs.
+    Args:
+        - target_key (str): target signal processor output key.
+        - synth_key (str): synthesize signal processor output key.
+    """
+    def __init__(self, target_key, synth_key, name='loudness_loss', **kwargs):
+        super(LoudnessLoss, self).__init__(mag_weight=0.0,
+                                           loudness_weight=1.0,
+                                           name=name,
+                                           **kwargs)
+        self.target_key = target_key
+        self.synth_key = synth_key
+    
+    def call(self, outputs, *args, **kwargs):
+        target_signal = outputs[self.target_key]['signal']
+        synth_signal = outputs[self.synth_key]['signal']
+
+        return super(SpectralLoss, self).call(target_signal,
+                                              synth_signal)

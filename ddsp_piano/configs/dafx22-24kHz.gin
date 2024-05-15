@@ -1,0 +1,131 @@
+import gin.tf.external_configurables
+import ddsp
+import ddsp_piano
+
+
+# ======
+# Macros
+# ======
+n_instruments = 10
+n_synths = 16
+
+frame_rate = 250
+sample_rate = 24000
+
+duration = 3
+reverb_duration = 1.5
+
+inference = False
+
+
+# =====
+# Model
+# =====
+get_model.model = @piano_model.PianoModel()
+
+
+# ===========
+# Sub-modules
+# ===========
+
+# Z-Encoder
+PianoModel.z_encoder = @sub_modules.OneHotZEncoder()
+OneHotZEncoder:
+    z_dim = 16
+    n_instruments = %n_instruments
+    duration = %duration
+    frame_rate = %frame_rate
+
+# Note release
+PianoModel.note_release = @sub_modules.NoteRelease()
+NoteRelease.frame_rate = 250
+
+# Parallelizer
+PianoModel.parallelizer = @sub_modules.Parallelizer()
+Parallelizer.n_synths = %n_synths
+
+# Inharmonicity model
+PianoModel.inharm_model = @sub_modules.InharmonicityNetwork()
+
+# Detuner
+PianoModel.detuner = @sub_modules.Detuner()
+Detuner.n_substrings = 2
+
+# Reverb
+PianoModel.reverb_model = @sub_modules.MultiInstrumentReverb()
+MultiInstrumentReverb:
+    n_instruments = %n_instruments
+    reverb_duration = %reverb_duration
+    sample_rate = %sample_rate
+
+# Context network
+PianoModel.context_network = @sub_modules.ContextNetwork()
+ContextNetwork.name = 'context_net'
+ContextNetwork.layers = [@context_net/layers.Dense(),
+                         @context_net/layers.GRU(),
+                         @context_net/nn.Normalize()]
+context_net/layers.Dense:
+    units = 32
+    activation = @tf.nn.leaky_relu
+context_net/layers.GRU:
+    units = 64
+    return_sequences = True
+
+# Monophonic network
+PianoModel.monophonic_network = @sub_modules.MonophonicNetwork()
+MonophonicNetwork:
+    name = 'mono_net'
+    layers = [@mono_net/dense1/layers.Dense(),
+              @mono_net/layers.GRU(),
+              @mono_net/dense2/layers.Dense(),
+              @mono_net/nn.Normalize()]
+    output_splits = (('amplitudes', 1),
+                     ('harmonic_distribution', 128),
+                     ('magnitudes', 96))
+mono_net/dense1/layers.Dense:
+    units = 128
+    activation = @tf.nn.leaky_relu
+mono_net/layers.GRU:
+    units = 192
+    return_sequences = True
+mono_net/dense2/layers.Dense:
+    units = 192
+    activation = @tf.nn.leaky_relu
+
+# Polyphonic processor group
+PianoModel.processor_group = @processors.ProcessorGroup()
+ProcessorGroup.dag = @polyphonic_dag.polyphonic_dag()
+polyphonic_dag.polyphonic_dag:
+    n_synths = %n_synths
+    additive = @inharm_synth.MultiInharmonic()
+    additive_controls = ['amplitudes', 'harmonic_distribution', 'inharm_coef', 'f0_hz']
+    # noise = @synths.FilteredNoise()
+    noise = @filtered_noise_synth.DynamicSizeFilteredNoise()
+    noise_controls = ['magnitudes']
+    reverb = @effects.Reverb()
+    reverb_controls = ['reverb_ir']
+
+filtered_noise_synth.DynamicSizeFilteredNoise:
+    name = 'noise'
+    frame_rate = %frame_rate
+    sample_rate = %sample_rate
+inharm_synth.MultiInharmonic:
+    name = 'additive'
+    frame_rate = %frame_rate
+    sample_rate = %sample_rate
+    inference = %inference
+effects.Reverb.trainable = False
+
+
+
+# ======
+# Losses
+# ======
+PianoModel.losses = [@ddsp_piano.modules.losses.SpectralLoss(),
+                     @ReverbRegularizer()]
+ddsp_piano.modules.losses.SpectralLoss:
+    loss_type = 'L1'
+    mag_weight = 1.0
+    logmag_weight = 1.0
+    name = 'audio_stft_loss'
+ReverbRegularizer.name = 'reverb_regularizer'

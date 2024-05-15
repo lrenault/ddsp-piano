@@ -1,9 +1,14 @@
+import gin
 import tensorflow as tf
 import ddsp
-
 from ddsp.training.models.model import Model
 
 
+def exists(x):
+    return x is not None
+
+
+@gin.configurable
 class PianoModel(Model):
     """DDSP model for piano synthesis from MIDI conditioning.
     Args:
@@ -15,9 +20,12 @@ class PianoModel(Model):
         merge and unmerge.
         - monophonic_network (nn.DictLayer): monophonic string model as
         neural network.
+        - surrogate_module (nn.DictLayer): compute complex amp modulus and time
+        for optimizng with the surrogate synthesis.
         - inharm_model (nn.DictLayer): inharmonicity model over tessitura.
         - detuner (nn.DictLayer): tuning model for pitch to absolute f0
         frequency.
+        - harmonic_masking (nn.DictLayer): sub-module for masking partials.
         - reverb_model (nn.DictLayer): recording environment impulse responses.
         - processor_group (ddsp.processors.ProcessorGroup): group of
         differentiable processors generating audio from controls.
@@ -30,33 +38,41 @@ class PianoModel(Model):
                  context_network=None,
                  parallelizer=None,
                  monophonic_network=None,
+                 surrogate_module=None,
                  inharm_model=None,
                  detuner=None,
+                 harmonic_masking=None,
+                 background_noise_model=None,
                  reverb_model=None,
                  processor_group=None,
                  losses=None,
                  **kwargs):
-        super(PianoModel, self).__init__(**kwargs)
-        self.z_encoder = z_encoder
-        self.note_release = note_release
-        self.context_network = context_network
-        self.parallelizer = parallelizer
-        self.monophonic_network = monophonic_network
-        self.inharm_model = inharm_model
-        self.detuner = detuner
-        self.reverb_model = reverb_model
-        self.processor_group = processor_group
+        super().__init__(**kwargs)
+        self.z_encoder              = z_encoder
+        self.note_release           = note_release
+        self.context_network        = context_network
+        self.parallelizer           = parallelizer
+        self.monophonic_network     = monophonic_network
+        self.surrogate_module       = surrogate_module
+        self.inharm_model           = inharm_model
+        self.detuner                = detuner
+        self.harmonic_masking       = harmonic_masking
+        self.background_noise_model = background_noise_model
+        self.reverb_model           = reverb_model
+        self.processor_group        = processor_group
 
         self.loss_objs = ddsp.core.make_iterable(losses)
 
     @property
     def n_synths(self):
-        return self.parallelizer.n_synths
+        return self.parallelizer.n_synths if self.parallelizer else 1
+
+    @property
+    def sample_rate(self):
+        return self.processor_group.processors[0].sample_rate
 
     def _update_losses_dict(self, loss_objs, *args, **kwargs):
-        super(PianoModel, self)._update_losses_dict(loss_objs,
-                                                    *args,
-                                                    **kwargs)
+        super()._update_losses_dict(loss_objs, *args, **kwargs)
         self._losses_dict['regularization_loss'] = tf.reduce_sum(self.losses)
 
     def alternate_training(self, first_phase=True):
@@ -67,43 +83,60 @@ class PianoModel(Model):
         # Modules involved with partial frequency computing are frozen during
         # the first training phase strategy.
         for module in [self.inharm_model,
-                       self.detuner]:
-            if module is not None:
+                       self.detuner,
+                       self.surrogate_module]:
+            if exists(module):
                 module.trainable = not first_phase
 
-        self.z_encoder.alternate_training(first_phase)
+        if exists(self.z_encoder):
+            self.z_encoder.alternate_training(first_phase)
 
         # Modules not involved in freq computing have inversed trainability
         for module in [self.note_release,
                        self.context_network,
+                       self.background_noise_model,
                        self.monophonic_network,
                        self.reverb_model]:
-            if module is not None:
+            if exists(module):
                 module.trainable = first_phase
 
         # Compute multiple note signals only when learning detuner weights
-        self.detuner.use_detune = not first_phase
+        if exists(self.detuner):
+            self.detuner.use_detune = not first_phase
+
+    def all_trainable(self, trainable=True):
+        for module in [self.inharm_model,
+                       self.detuner,
+                       self.surrogate_module,
+                       self.note_release,
+                       self.context_network,
+                       self.monophonic_network,
+                       self.reverb_model]:
+            if exists(module):
+                module.trainable = trainable
 
     def compute_global_features(self, features, training):
         """Call all modules computing global features."""
-        if self.z_encoder is not None:
-            features.update(self.z_encoder(features, training=training))
-        if self.context_network is not None:
-            features.update(self.context_network(features, training=training))
-        if self.reverb_model is not None:
-            features.update(self.reverb_model(features, training=training))
+        for sub_module in [self.z_encoder,
+                           self.context_network,
+                           self.background_noise_model,
+                           self.reverb_model]:
+            if exists(sub_module):
+                features.update(sub_module(features, training=training))
+
         return features
 
     def compute_monophonic_features(self, features, training):
         """Call all modules computing monophonic features."""
-        if self.note_release is not None:
-            features.update(self.note_release(features, training=training))
-        if self.inharm_model is not None:
-            features.update(self.inharm_model(features, training=training))
-        if self.detuner is not None:
-            features.update(self.detuner(features, training=training))
-        if self.monophonic_network is not None:
-            features.update(self.monophonic_network(features, training=training))
+        for sub_module in [self.note_release,
+                           self.inharm_model,
+                           self.detuner,
+                           self.monophonic_network,
+                           self.surrogate_module,
+                           self.harmonic_masking]:
+            if exists(sub_module):
+                features.update(sub_module(features, training=training))
+
         return features
 
     def get_audio_from_outputs(self, outputs):
