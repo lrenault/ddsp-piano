@@ -8,10 +8,16 @@ from ddsp_piano.modules.inharm_synth import MultiInharmonic
 
 tfkl = tf.keras.layers
 
+# ===========
+# This config script is deprecated in favor of gin-config files.
+# This file is kept for legacy purpose (as it corresponds to the model version
+# of the paper) and can serve as an example for configuring a model without gin.
+# 
+# The .gin equivalent to this model is located at ddsp_piano/configs/dafx22.gin
+# ===========
+
 
 def build_polyphonic_processor_group(n_synths=16,
-                                     n_substrings=2,
-                                     n_piano_models=10,
                                      sample_rate=16000,
                                      duration=3,
                                      reverb_duration=None,
@@ -20,7 +26,6 @@ def build_polyphonic_processor_group(n_synths=16,
     """ Polyphonic bank of additive + filtered noise synthesizers.
     Args:
         - n_synths (int): number of monophonic synthesizers.
-        - n_substrings (int): number of strings per note.
         - sample_rate (int): number of samples per second.
         - duration (float): length of generated sample (in seconds).
         - reverb_length (float): length of the reverb impulse response.
@@ -86,21 +91,22 @@ def get_model(inference=False,
               n_substrings=2,
               n_piano_models=10,
               piano_embedding_dim=16,
-              n_noise_filter_banks=64,
               frame_rate=250,
               sample_rate=16000,
               reverb_duration=1.5):
     # Self-contained sub-modules
     z_encoder = sub_modules.OneHotZEncoder(n_instruments=n_piano_models,
                                            z_dim=piano_embedding_dim,
-                                           n_frames=int(duration * frame_rate))
+                                           frame_rate=frame_rate,
+                                           duration=duration)
     note_release = sub_modules.NoteRelease(frame_rate=frame_rate)
     parallelizer = sub_modules.Parallelizer(n_synths=n_synths)
     inharm_model = sub_modules.InharmonicityNetwork()
     detuner = sub_modules.Detuner(n_substrings=n_substrings)
     reverb_model = sub_modules.MultiInstrumentReverb(
         n_instruments=n_piano_models,
-        reverb_length=int(reverb_duration * sample_rate)
+        reverb_duration=reverb_duration,
+        sample_rate=sample_rate,
     )
     # Neural modules
     context_network = sub_modules.ContextNetwork(
@@ -119,8 +125,6 @@ def get_model(inference=False,
 
     processor_group = build_polyphonic_processor_group(
         n_synths=n_synths,
-        n_substrings=n_substrings,
-        n_piano_models=n_piano_models,
         sample_rate=sample_rate,
         duration=duration,
         reverb_duration=reverb_duration,
@@ -161,8 +165,7 @@ def build_model(model, batch_size=6, first_phase=False, **kwargs):
 
     # Model building by forwarding a batch sample
     batch = get_dummy_data(batch_size=batch_size, **kwargs)
-    _ = model(batch, training=True)
-
+    _ = model(batch, training=True, return_losses=True)
     # Print model summary
     model.summary()
 

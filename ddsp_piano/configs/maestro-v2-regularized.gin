@@ -1,0 +1,176 @@
+import gin.tf.external_configurables
+import ddsp
+import ddsp_piano
+
+
+# ======
+# Macros
+# ======
+n_instruments = 10
+n_synths = 16
+
+frame_rate = 250
+sample_rate = 24000
+
+duration = 3
+
+inference = False
+
+
+# =====
+# Model
+# =====
+get_model.model = @piano_model.PianoModel()
+
+
+# ===========
+# Sub-modules
+# ===========
+
+# Note release
+PianoModel.note_release = @sub_modules.NoteRelease()
+NoteRelease.frame_rate = 250
+
+# Parallelizer
+PianoModel.parallelizer = @sub_modules.Parallelizer()
+Parallelizer:
+    n_synths = %n_synths
+    global_keys = ('conditioning', 'context', 'piano_model')
+
+# Inharmonicity and tuning model
+PianoModel.inharm_model = @sub_modules.JointParametricInharmTuning()
+JointParametricInharmTuning:
+    n_instruments = %n_instruments
+    pretrained_weights = {
+        "alpha_b": [[-0.10498029539736882],
+                    [-0.103397365808098],
+                    [-0.10397382934390406],
+                    [-0.1027632010509],
+                    [-0.11412346536287879],
+                    [-0.11243111008749364],
+                    [-0.11022918531006379],
+                    [-0.11304421044489406],
+                    [-0.11219238911478058],
+                    [-0.1136117886037094]],
+        "beta_b": [[-6.866829367443394],
+                   [-6.866783669374699],
+                   [-6.866856843404174],
+                   [-6.866760472755433],
+                   [-6.867112758686625],
+                   [-6.8670459701993005],
+                   [-6.867005412258342],
+                   [-6.8671280834048325],
+                   [-6.867070224363755],
+                   [-6.867052838812242]],
+        "alpha_t": [[0.09405108370762505],
+                    [0.09428687197916932],
+                    [0.09291646217556483],
+                    [0.09378490184341534],
+                    [0.09473960700044547],
+                    [0.0946312366279332],
+                    [0.09482173401504473],
+                    [0.09484584668584539],
+                    [0.09450426855549614],
+                    [0.09488582813469065]],
+        "beta_t": [[-13.70498337594341],
+                   [-13.704972884604071],
+                   [-13.704819779849357],
+                   [-13.704887473133587],
+                   [-13.704897802616232],
+                   [-13.704882990638756],
+                   [-13.704938991009339],
+                   [-13.704922186081077],
+                   [-13.704935675526722],
+                   [-13.705007198537064]],
+        "pitch_ref": [[54.71379282301681],
+                      [64.33843910839924],
+                      [66.95422366370335],
+                      [59.712390413785336],
+                      [70.81419678430807],
+                      [64.0],
+                      [57.2228467711826],
+                      [67.82028990072976],
+                      [60.680246191463425],
+                      [63.02110904860535]],
+        "K": [[9.302255937632737],
+              [7.223599560962571],
+              [12.223855769942192],
+              [8.29737874759059],
+              [4.558871484570812],
+              [4.51],
+              [13.316667367055667],
+              [7.368416722448197],
+              [12.849204042784237],
+              [11.251719911066072]],
+        "alpha": [[27.57823832089277],
+                  [23.84183259556874],
+                  [23.99969267752787],
+                  [21.115926380302316],
+                  [15.724893584533097],
+                  [24.0],
+                  [17.339843953212842],
+                  [19.173967085386415],
+                  [10.727522068281395],
+                  [17.215322155578242]],
+    }
+
+# Reverb
+PianoModel.reverb_model = @sub_modules.MultiInstrumentFeedbackDelayReverb()
+MultiInstrumentFeedbackDelayReverb:
+    n_instruments = %n_instruments
+    sample_rate   = %sample_rate
+    regularize_early = True
+
+# Context network
+PianoModel.context_network = @sub_modules.FiLMContextNetwork()
+FiLMContextNetwork:
+    name = 'context_net'
+    n_instruments = %n_instruments
+    layer_dim   = 64
+    context_dim = 32
+
+# Monophonic network
+PianoModel.monophonic_network = @sub_modules.MonophonicDeepNetwork()
+MonophonicDeepNetwork:
+    name = 'mono_net'
+    ch   = 64
+    layers_per_stack = 3
+    rnn_channels = 192
+    output_splits = (('amplitudes', 1),
+                     ('harmonic_distribution', 128),
+                     ('magnitudes', 96))
+
+# Polyphonic processor group
+PianoModel.processor_group = @processors.ProcessorGroup()
+ProcessorGroup.dag = @polyphonic_dag.polyphonic_dag()
+polyphonic_dag.polyphonic_dag:
+    n_synths = %n_synths
+    additive = @inharm_synth.MultiInharmonic()
+    additive_controls = ['amplitudes', 'harmonic_distribution', 'inharm_coef', 'f0_hz']
+    noise = @filtered_noise_synth.DynamicSizeFilteredNoise()
+    noise_controls = ['magnitudes']
+    reverb = @effects.Reverb()
+    reverb_controls = ['reverb_ir']
+
+filtered_noise_synth.DynamicSizeFilteredNoise:
+    name = 'noise'
+    frame_rate  = %frame_rate
+    sample_rate = %sample_rate
+inharm_synth.MultiInharmonic:
+    name = 'additive'
+    frame_rate  = %frame_rate
+    sample_rate = %sample_rate
+    inference   = %inference
+effects.Reverb.trainable = False
+
+
+
+# ======
+# Losses
+# ======
+PianoModel.losses = [@ddsp_piano.modules.losses.SpectralLoss(),]
+ddsp_piano.modules.losses.SpectralLoss:
+    loss_type = 'L1'
+    mag_weight = 1.0
+    logmag_weight = 1.0
+    name = 'audio_stft_loss'
